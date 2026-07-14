@@ -26,8 +26,9 @@ export interface PageHeaderProps {
   icon?: ReactNode;
   /** Big page title. Required. */
   title: string;
-  /** Small gray subtitle below the title. */
-  subtitle?: string;
+  /** Small gray subtitle below the title. Accepts a string OR a React node
+   *  (so callers can pass a <Skeleton /> while data is loading). */
+  subtitle?: ReactNode;
   /** Optional right-side action — usually a Button. */
   action?: ReactNode;
   /** Extra classes for the outer wrapper. */
