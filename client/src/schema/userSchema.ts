@@ -6,7 +6,7 @@ export const userSignupSchema=z.object({
 fullname:z.string().min(1,"Fullname is required"),
 email:z.string().email("Invalid email address"),
 password:z.string().min(6,"Password must be at least 6 digits"),
-Contact:z.string().min(10,"Contact number must be 10 digits long")
+contact:z.string().min(7,"Contact number must be at least 7 digits")
 
 });
 export type SignupInputState=z.infer<typeof userSignupSchema>;

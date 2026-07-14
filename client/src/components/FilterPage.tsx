@@ -1,109 +1,256 @@
-// FilterPage.tsx
-import { useState } from "react";
+// src/components/FilterPage.tsx
+// ===============================
+// Purpose: Filter sidebar for the Restaurants page.
+//          Lifted-state pattern: filter selection lives in the parent
+//          (SearchPage) so any change re-triggers the parent's fetch.
+//
+// Layout:
+//   <Card> wrapper
+//     ├── Header  (icon + title + active-filter count)
+//     ├── Body    (Cuisine section + divider + Price section)
+//     └── Footer  (Reset button — only when at least one filter is active)
+//
+// Why each section is a "mini-card":
+//   The single-card-with-internal-dividers pattern keeps the panel feeling
+//   like ONE thing (one card) but still gives each filter group its own
+//   visual breathing room. It's the pattern used by Amazon, Airbnb, and most
+//   e-commerce search pages — familiar to users.
+//
+// Responsive tokens (kept consistent with SearchPage):
+//   - Card radius:    rounded-xl → sm:rounded-2xl
+//   - Card padding:   px-5 py-4 → sm:px-6 sm:py-5
+//   - Row padding:    px-2 py-2 → sm:px-2.5
+//   - Hover/active:   bg-orange-50/60 (subtle) → active: bg-orange-50
+//   - Shadow:         shadow-sm (mobile) → sm:shadow (desktop)
+//   - Text size:      text-sm → sm:text-[15px] for primary labels
+// ===============================
+
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Utensils, DollarSign, SlidersHorizontal, RotateCcw } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 
 const cuisineOptions = ["Desi", "Pizza", "Burger", "Starter", "Dessert", "Drinks"];
 const priceRanges = ["Low", "Medium", "High"];
 
-const FilterPage = () => {
-  const [selectedCuisines, setSelectedCuisines] = useState<string[]>([]);
-  const [selectedPrices, setSelectedPrices] = useState<string[]>([]);
+interface Props {
+  selectedCuisines: string[];
+  setSelectedCuisines: (value: string[]) => void;
+  selectedPrices: string[];
+  setSelectedPrices: (value: string[]) => void;
+}
+
+const FilterPage = ({
+  selectedCuisines,
+  setSelectedCuisines,
+  selectedPrices,
+  setSelectedPrices,
+}: Props) => {
+  // Total number of currently-applied filters — drives the header badge
+  // and the visibility of the "Reset" button in the footer.
+  const activeCount = selectedCuisines.length + selectedPrices.length;
+  const hasActive = activeCount > 0;
 
   const handleCuisineToggle = (value: string) => {
-    setSelectedCuisines(prev =>
-      prev.includes(value) ? prev.filter(c => c !== value): [...prev, value]
+    // Keep the original case ("Pizza", "Burger") — the backend's cuisine filter
+    // is now case-insensitive, and the badge display in SearchPage needs the
+    // capitalized form to look right ("pizza ✕" would be ugly).
+    setSelectedCuisines(
+      selectedCuisines.includes(value)
+        ? selectedCuisines.filter((c) => c !== value)
+        : [...selectedCuisines, value]
     );
   };
 
   const handlePriceToggle = (value: string) => {
-    setSelectedPrices(prev =>
-      prev.includes(value)
-        ? prev.filter(p => p !== value)
-        : [...prev, value]
-    );
+    // Price is stored lowercase in the DB (enum: "low" | "medium" | "high"),
+    // so we lowercase here. The display is capitalized via the priceRanges
+    // array, but the value sent to the API must match the enum.
+    const lower = value.toLowerCase();
+    setSelectedPrices(selectedPrices.includes(lower) ? [] : [lower]);
+  };
+
+  const handleReset = () => {
+    setSelectedCuisines([]);
+    setSelectedPrices([]);
   };
 
   return (
-    <div>
-      <div className="w-full md:w-90 p-6 h-auto shadow-md">
-        <div className="flex flex-col gap-4">
-          <h2 className="text-lg font-bold">Filters</h2>
-          <div>
-            <div className="flex flex-col gap-1">
-              <h3 className="font-medium ">Cuisine</h3>
-
-{cuisineOptions.map((cuisine, idx) => (
-                <>          
-                  <Label key={idx} className="flex items-center gap-2 pb-2">
-
-                  <Checkbox
-                    checked={selectedCuisines.includes(cuisine)}
-                    onCheckedChange={() => handleCuisineToggle(cuisine)}
-                  />
-                  {cuisine}
-                </Label>
-                </>
-              ))}
-            </div>
-          </div>
-          <div>
-            <h3 className="font-medium mb-2">Price Range</h3>
-            <div className="flex flex-col gap-4">
-              {priceRanges.map((price, idx) => (
-                <Label key={idx} className="flex items-center gap-2">
-                  <Checkbox
-                    checked={selectedPrices.includes(price)}
-                    onCheckedChange={() => handlePriceToggle(price)}
-                  />
-                  {price}
-                </Label>
-              ))}
-            </div>
-          </div>
-
+    <Card
+      // Responsive card:
+      //   - radius: rounded-xl (mobile) → sm:rounded-2xl (desktop)
+      //   - shadow: shadow-sm → sm:shadow
+      className={cn(
+        "border border-gray-200 bg-white",
+        "rounded-xl sm:rounded-2xl",
+        "shadow-sm sm:shadow"
+      )}
+    >
+      {/* ============== Header ==============
+          px-5 (mobile) → sm:px-6 (24px) for more breathing room on bigger screens.
+          py-4 → sm:py-5 for slightly taller header on desktop. */}
+      <CardHeader className="px-5 sm:px-6 py-4 sm:py-5 border-b border-gray-100">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-base sm:text-lg font-bold text-gray-900 flex items-center gap-2">
+            <SlidersHorizontal className="w-4 h-4 text-orange-500" />
+            Filters
+          </h2>
+          {activeCount > 0 && (
+            <span className="inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full bg-orange-500 text-white text-xs font-semibold">
+              {activeCount}
+            </span>
+          )}
         </div>
-      </div>
-    </div>
+      </CardHeader>
 
+      {/* ============== Body ============== */}
+      <CardContent className="p-0">
+        {/* ----- Cuisine section ----- */}
+        <FilterSection
+          icon={<Utensils className="w-3.5 h-3.5" />}
+          title="Cuisine"
+          count={selectedCuisines.length}
+        >
+          <div className="flex flex-col gap-0.5 sm:gap-1">
+            {cuisineOptions.map((cuisine) => {
+              const checked = selectedCuisines.includes(cuisine);
+              return (
+                <FilterRow
+                  key={cuisine}
+                  label={cuisine}
+                  checked={checked}
+                  onToggle={() => handleCuisineToggle(cuisine)}
+                />
+              );
+            })}
+          </div>
+        </FilterSection>
 
-    //   <div className="w-full md:w-70">
-    //     <div className="flex flex-col gap-4">
-    //       <h2 className="text-lg font-bold">Filters</h2>
+        {/* Thin divider between sections — stronger on desktop (gray-200) */}
+        <div className="border-t border-gray-100 sm:border-gray-200" />
 
-    //       <div>
-    //         <h3 className="font-medium mb-2">Cuisines</h3>
-    //         <div className="flex flex-col gap-2">
-    //           {cuisineOptions.map((cuisine, idx) => (
-    //             <Label key={idx} className="flex items-center gap-2">
-    //               <Checkbox
-    //                 checked={selectedCuisines.includes(cuisine)}
-    //                 onCheckedChange={() => handleCuisineToggle(cuisine)}
-    //               />
-    //               {cuisine}
-    //             </Label>
-    //           ))}
-    //         </div>
-    //       </div>
+        {/* ----- Price range section ----- */}
+        <FilterSection
+          icon={<DollarSign className="w-3.5 h-3.5" />}
+          title="Price range"
+          count={selectedPrices.length}
+        >
+          <div className="flex flex-col gap-0.5 sm:gap-1">
+            {priceRanges.map((price) => {
+              const lower = price.toLowerCase();
+              const checked = selectedPrices.includes(lower);
+              return (
+                <FilterRow
+                  key={price}
+                  label={price}
+                  checked={checked}
+                  onToggle={() => handlePriceToggle(price)}
+                />
+              );
+            })}
+          </div>
+        </FilterSection>
+      </CardContent>
 
-    //       <div>
-    //         <h3 className="font-medium mb-2">Price Range</h3>
-    //         <div className="flex flex-col gap-2">
-    //           {priceRanges.map((price, idx) => (
-    //             <Label key={idx} className="flex items-center gap-2">
-    //               <Checkbox
-    //                 checked={selectedPrices.includes(price)}
-    //                 onCheckedChange={() => handlePriceToggle(price)}
-    //               />
-    //               {price}
-    //             </Label>
-    //           ))}
-    //         </div>
-    //       </div>
-    //     </div>
-    //   </div>
+      {/* ============== Footer (only when filters are active) ============== */}
+      {hasActive && (
+        <CardFooter className="px-5 sm:px-6 py-3 sm:py-4 border-t border-gray-100 sm:border-gray-200 bg-gray-50/50">
+          <button
+            type="button"
+            onClick={handleReset}
+            className={cn(
+              "w-full inline-flex items-center justify-center gap-1.5",
+              "text-sm font-semibold text-gray-700",
+              "hover:text-orange-600 hover:bg-white",
+              "py-2 rounded-md transition-colors"
+            )}
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reset filters
+          </button>
+        </CardFooter>
+      )}
+    </Card>
   );
-
 };
 
 export default FilterPage;
+
+// ============================================================
+// FILTER SECTION (sub-component)
+// A "mini-card" for each filter group. Header has icon + title + count
+// chip; body has the options. Padding is generous on the sides, tighter
+// on top/bottom, to feel compact but breathable.
+//
+// Responsive tokens:
+//   - section padding:  px-5 py-4 → sm:px-6 sm:py-5
+//   - section gap:      space-y-3 → sm:space-y-4
+// ============================================================
+const FilterSection = ({
+  icon,
+  title,
+  count,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  count: number;
+  children: React.ReactNode;
+}) => (
+  <section className="px-5 sm:px-6 py-4 sm:py-5">
+    <h3 className="text-[11px] sm:text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 sm:mb-4 flex items-center gap-1.5">
+      {icon}
+      <span>{title}</span>
+      {count > 0 && (
+        <span className="ml-auto inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-bold">
+          {count}
+        </span>
+      )}
+    </h3>
+    {children}
+  </section>
+);
+
+// ============================================================
+// FILTER ROW (sub-component)
+// One checkbox + label. Highlights when selected (orange-tinted background
+// + bolder text). Hover state is subtle so the whole sidebar doesn't
+// flicker on mouseover.
+//
+// Responsive tokens:
+//   - row padding:    px-2 py-2 → sm:px-2.5 sm:py-2.5
+//   - text size:      text-sm → sm:text-[15px]
+//   - hover bg:       orange-50/60 (subtle) — consistent across breakpoints
+// ============================================================
+const FilterRow = ({
+  label,
+  checked,
+  onToggle,
+}: {
+  label: string;
+  checked: boolean;
+  onToggle: () => void;
+}) => (
+  <Label
+    className={cn(
+      "flex items-center gap-2.5 cursor-pointer rounded-md",
+      "px-2 sm:px-2.5 py-2 sm:py-2.5",
+      "transition-all duration-150",
+      // Hover: subtle orange wash
+      "hover:bg-orange-50/60",
+      // Active: stronger orange + tiny left border accent
+      checked && "bg-orange-50"
+    )}
+  >
+    <Checkbox checked={checked} onCheckedChange={onToggle} />
+    <span
+      className={cn(
+        "text-sm sm:text-[15px] transition-colors",
+        checked ? "font-semibold text-gray-900" : "text-gray-700"
+      )}
+    >
+      {label}
+    </span>
+  </Label>
+);
