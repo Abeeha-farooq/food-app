@@ -1,0 +1,19 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "comment": "Vercel serverless function entry. This package.json lists the server's dependencies so Vercel can install them in api/node_modules and the function bundler can resolve them. Keep this in sync with server/package.json's dependencies block — they're the same set.",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.7.3",
+    "nodemailer": "^9.0.3",
+    "stripe": "^22.3.1",
+    "zod": "^4.4.3"
+  }
+}

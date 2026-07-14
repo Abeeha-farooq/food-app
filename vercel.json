@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "comment": "Vercel project config — hosts BOTH the React client (static) and the Express API (serverless function in /api). See DEPLOY.md for the full deployment runbook.",
+  "installCommand": "npm --prefix client install && npm --prefix server install --omit=dev && npm --prefix api install --omit=dev",
+  "buildCommand": "cd client && npm run build",
+  "outputDirectory": "client/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    }
+  ],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 10,
+      "memory": 1024
+    }
+  }
+}
