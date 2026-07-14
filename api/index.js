@@ -7,13 +7,17 @@
 // to Vercel's serverless runtime. Every request to your Vercel URL that
 // doesn't match a static asset gets routed here.
 //
-// Why this works:
-//   - Vercel's serverless runtime supports Node's `req, res` pattern,
-//     which is what Express expects.
-//   - The Express app already handles all the routes (`/api/...`),
-//     middleware, error handling, and DB connection caching.
-//   - The `vercel.json` at the project root configures Vercel to build
-//     the client AND treat this file as the serverless function.
+// Why the wrapper:
+//   Vercel's serverless runtime expects a default export shaped as
+//   `(req, res) => any`. Express's `app` is `(req, res, next) => any`.
+//   The 2-arg wrapper below matches Vercel's expected signature and
+//   leaves `next` undefined — Express handles a missing `next` as
+//   "no further middleware", which is the normal case anyway.
+//
+//   The `vercel.json` rewrite `{ "source": "/api/:path*", "destination":
+//   "/api/index" }` explicitly routes every `/api/...` request to this
+//   function, beating the catch-all SPA rewrite (which would otherwise
+//   send POST requests to index.html and cause a 405).
 //
 // The Stripe webhook is still correctly handled — Express's
 // `express.raw({ type: "application/json" })` middleware on the
@@ -23,6 +27,5 @@
 
 import app from "../server/server.js";
 
-// Vercel expects a default export that is `(req, res) => any`.
-// Express's `app` is itself such a function, so we can export it directly.
-export default app;
+// 2-arg wrapper matches Vercel's expected (req, res) handler signature.
+export default (req, res) => app(req, res);
