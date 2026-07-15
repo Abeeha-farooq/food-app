@@ -18,8 +18,15 @@ import "dotenv/config";
 import nodemailer from "nodemailer";
 import ApiError from "./apiError.js";
 
+// Safe default for MAIL_DRY_RUN: if not set in the environment, default
+// to "true" so the server doesn't try to send real emails (which would
+// fail loudly in dev / Vercel without SMTP creds).
+//   - "true"  → emails printed to console (no SMTP needed)
+//   - "false" → emails sent via Nodemailer using MAIL_HOST/PORT/USER/PASS
+if (!process.env.MAIL_DRY_RUN) {
+  process.env.MAIL_DRY_RUN = "true";
+}
 
-MAIL_DRY_RUN=false
 // CONFIG VALIDATION
 // Runs at module load. We log a clear warning if SMTP env vars are missing
 // in production mode, so the developer sees it BEFORE the first email fails.
