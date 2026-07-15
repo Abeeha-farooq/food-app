@@ -37,8 +37,8 @@ const connectDB = async () => {
   // === DEBUG LOGGING (delete after 504 is fixed) ===
   const startTime = Date.now();
   console.log(
-    `[db] connectDB called | MONGO_URI set: ${Boolean(process.env.MONGO_URI)} | ` +
-    `MONGO_URI prefix: ${process.env.MONGO_URI?.slice(0, 30)}... | ` +
+    `[db] connectDB called | MONGO_URI set: ${Boolean(process.env.MONGODB_URI)} | ` +
+    `MONGO_URI prefix: ${process.env.MONGODB_URI?.slice(0, 30)}... | ` +
     `cached.conn: ${Boolean(cached.conn)} | cached.promise: ${Boolean(cached.promise)}`
   );
   // === END DEBUG LOGGING ===
@@ -51,14 +51,14 @@ const connectDB = async () => {
 
   // If a connection attempt is already in flight (rare race), wait for it
   if (!cached.promise) {
-    if (!process.env.MONGO_URI) {
+    if (!process.env.MONGODB_URI) {
       console.error("[db] FATAL: MONGO_URI env var is missing");
       throw new Error("MONGO_URI env var is not set");
     }
     console.log("[db] starting new mongoose.connect()...");
     const connectStart = Date.now();
     cached.promise = mongoose
-      .connect(process.env.MONGO_URI, {
+      .connect(process.env.MONGODB_URI, {
         // Cap the connection attempt at 8 seconds — Vercel gives us 10s
         // total, so we want to fail fast and let the function return
         // a proper error instead of timing out.
