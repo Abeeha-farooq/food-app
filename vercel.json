@@ -1,6 +1,6 @@
 {
   "installCommand": "npm --prefix client install && npm --prefix server install --omit=dev && npm --prefix api install --omit=dev",
-  "buildCommand": "cd client && npm run build",
+  "buildCommand": "node scripts/copy-server.js && cd client && npm run build",
   "outputDirectory": "client/dist",
   "rewrites": [
     {

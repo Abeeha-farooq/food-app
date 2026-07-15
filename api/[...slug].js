@@ -2,40 +2,53 @@
 // ===============================
 // Purpose: Vercel serverless catch-all entry point for /api/*
 //
-// The single-bracket [...slug] is Vercel's required catch-all pattern:
-//   - matches /api/foo        (slug is ["foo"])
-//   - matches /api/foo/bar    (slug is ["foo", "bar"])
-//   - matches /api/a/b/c/d    (slug is ["a", "b", "c", "d"])
-//
-// Every /api/* request gets routed to this single function. We hand the
-// (req, res) pair to the Express app imported from server/server.js —
-// Express then routes based on the full req.url (e.g. /api/auth/login
-// routes through `app.use("/api/auth", authRoutes)`).
-//
-// Why the URL reconstruction:
-//   Vercel's catch-all may set req.url to just the function's base path
-//   (e.g. "/api") instead of the full request path. The actual path
-//   segments live in req.query.slug. We rebuild req.url from the slug
-//   so Express's route matching (which is prefix-based: app.use("/api/
-//   auth", ...)) works correctly.
-//
-// The Stripe webhook is still correctly handled — Express's
-// `express.raw({ type: "application/json" })` middleware on the
-// `/api/payments/webhook` route receives the raw body before any
-// JSON parsing, so signature verification still works.
+// Matches any /api/<path> request via Vercel's [...slug] catch-all.
+// The build step (scripts/copy-server.js) copies server/ → api/server/
+// so the Express import is same-directory relative and the bundler is happy.
 // ===============================
 
-import app from "../server/server.js";
+import app from "./server/server.js";
 
-export default (req, res) => {
-  // Rebuild req.url from the slug so Express can match its /api/*
-  // route prefixes. If Vercel already passed the full URL, this is
-  // effectively a no-op (the rebuild produces the same string).
-  const slug = req.query?.slug;
-  if (Array.isArray(slug) && slug.length > 0) {
-    req.url = "/api/" + slug.join("/");
-  } else if (Array.isArray(slug) && slug.length === 0) {
-    req.url = "/api";
+export default async (req, res) => {
+  // === TEMPORARY DEBUG LOGGING (delete after we confirm 404 is fixed) ===
+  // Logs the raw request Vercel hands us so we can see what req.url and
+  // req.query.slug look like at runtime. Visible in Vercel Dashboard →
+  // Logs → filter by this function.
+  console.log(
+    `[api] ${req.method} ${req.url} | slug=${JSON.stringify(req.query?.slug)}`
+  );
+  // === END DEBUG LOGGING ===
+
+  try {
+    // Reconstruct req.url from the slug. The catch-all routing pattern
+    // means Vercel may or may not set req.url to the full original path
+    // (behavior varies by Vercel version). We rebuild defensively so
+    // Express's /api/* route prefixes always match.
+    //
+    //   POST /api/auth/login
+    //     → Vercel matches [...slug], slug = ["auth", "login"]
+    //     → we set req.url = "/api/auth/login"
+    //     → app.use("/api/auth", authRoutes) → /login handler
+    const slug = req.query?.slug;
+    if (Array.isArray(slug) && slug.length > 0) {
+      req.url = "/api/" + slug.join("/");
+    } else if (Array.isArray(slug) && slug.length === 0) {
+      req.url = "/api";
+    }
+    // If no slug at all (function called some other way), req.url is
+    // used as-is.
+
+    return app(req, res);
+  } catch (err) {
+    // Surface any startup/runtime error as a 500 with a message,
+    // so the failure mode is obvious in the browser AND in the logs.
+    console.error("[api] HANDLER ERROR:", err);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: "Server error",
+        error: err?.message || String(err),
+      });
+    }
   }
-  return app(req, res);
 };

@@ -4,6 +4,7 @@ node_modules/
 # build files
 dist/
 build/
+api/server/
 
 # environment variables
 .env
