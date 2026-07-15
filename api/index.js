@@ -15,9 +15,12 @@
 //   "no further middleware", which is the normal case anyway.
 //
 //   The `vercel.json` rewrite `{ "source": "/api/:path*", "destination":
-//   "/api/index" }` explicitly routes every `/api/...` request to this
-//   function, beating the catch-all SPA rewrite (which would otherwise
-//   send POST requests to index.html and cause a 405).
+//   "/api" }` explicitly routes every `/api/...` request to this function,
+//   beating the catch-all SPA rewrite (which would otherwise send POST
+//   requests to index.html and cause a 405). The destination is `/api`
+//   (NOT `/api/index`) because Vercel exposes `api/index.js` at the URL
+//   `/api` — using `/api/index` makes Vercel look for a function at
+//   `api/index` (no extension), fail to find it, and fall through.
 //
 // The Stripe webhook is still correctly handled — Express's
 // `express.raw({ type: "application/json" })` middleware on the

@@ -6,11 +6,13 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "/api/index"
+      "destination": "/api",
+      "_note": "Routes /api/* to the api/index.js serverless function. Destination is /api (NOT /api/index) because Vercel exposes api/index.js at the URL /api — using /api/index makes Vercel look for a function at api/index (no extension), fail, fall through to the catch-all, and return 405."
     },
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "source": "/((?!api/).*)",
+      "destination": "/index.html",
+      "_note": "Catch-all for client-side routes (React Router). The negative lookahead (?!api/) ensures /api/* paths are NEVER rewritten to index.html — even if the explicit API rewrite above fails to match for some reason."
     }
   ],
   "headers": [
@@ -28,6 +30,11 @@
     "api/index.js": {
       "maxDuration": 10,
       "memory": 1024
+    }
+  },
+  "build": {
+    "env": {
+      "NODE_VERSION": "20.x"
     }
   }
 }
