@@ -20,7 +20,7 @@
     }
   ],
   "functions": {
-    "api/[[...slug]].js": {
+    "api/[...slug].js": {
       "maxDuration": 10,
       "memory": 1024
     }
