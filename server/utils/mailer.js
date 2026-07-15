@@ -18,6 +18,8 @@ import "dotenv/config";
 import nodemailer from "nodemailer";
 import ApiError from "./apiError.js";
 
+
+MAIL_DRY_RUN=false
 // CONFIG VALIDATION
 // Runs at module load. We log a clear warning if SMTP env vars are missing
 // in production mode, so the developer sees it BEFORE the first email fails.

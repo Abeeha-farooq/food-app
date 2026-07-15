@@ -42,7 +42,7 @@ const connectDB = async () => {
     `cached.conn: ${Boolean(cached.conn)} | cached.promise: ${Boolean(cached.promise)}`
   );
   // === END DEBUG LOGGING ===
-
+//ok 
   // If we already have a live connection, reuse it
   if (cached.conn) {
     console.log(`[db] reusing cached connection (saved ${Date.now() - startTime}ms)`);
