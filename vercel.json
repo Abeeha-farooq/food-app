@@ -4,6 +4,10 @@
   "outputDirectory": "client/dist",
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "/api/handler"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
@@ -20,7 +24,7 @@
     }
   ],
   "functions": {
-    "api/[...slug].js": {
+    "api/handler.js": {
       "maxDuration": 10,
       "memory": 1024
     }
