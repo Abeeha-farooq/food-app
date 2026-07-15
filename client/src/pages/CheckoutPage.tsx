@@ -195,7 +195,10 @@ const CheckoutPage = () => {
       const res = await api.post("/orders", {
         restaurantId,
         items: items.map((i) => ({
-          menuItemId: i.id,
+          // i.id is the composite cart key ("menuItemId__restaurantId")
+          // used for cart line identification. The backend needs the
+          // raw ObjectId stored in i.menuItemId for the DB lookup.
+          menuItemId: i.menuItemId,
           quantity: i.quantity,
         })),
         deliveryAddress: deliveryAddress.trim(),
