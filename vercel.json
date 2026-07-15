@@ -1,18 +1,12 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "comment": "Vercel project config — hosts BOTH the React client (static) and the Express API (serverless function in /api). See DEPLOY.md for the full deployment runbook.",
   "installCommand": "npm --prefix client install && npm --prefix server install --omit=dev && npm --prefix api install --omit=dev",
   "buildCommand": "cd client && npm run build",
   "outputDirectory": "client/dist",
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "/api",
-      "_note": "Routes /api/* to the api/index.js serverless function. Destination is /api (NOT /api/index) because Vercel exposes api/index.js at the URL /api — using /api/index makes Vercel look for a function at api/index (no extension), fail, fall through to the catch-all, and return 405."
-    },
-    {
       "source": "/((?!api/).*)",
-      "destination": "/index.html",
-      "_note": "Catch-all for client-side routes (React Router). The negative lookahead (?!api/) ensures /api/* paths are NEVER rewritten to index.html — even if the explicit API rewrite above fails to match for some reason."
+      "destination": "/index.html"
     }
   ],
   "headers": [
@@ -27,14 +21,9 @@
     }
   ],
   "functions": {
-    "api/index.js": {
+    "api/[[...slug]].js": {
       "maxDuration": 10,
       "memory": 1024
-    }
-  },
-  "build": {
-    "env": {
-      "NODE_VERSION": "20.x"
     }
   }
 }
