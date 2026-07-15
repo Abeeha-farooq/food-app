@@ -67,7 +67,11 @@ export const PageHeader = ({
           <span className="truncate">{title}</span>
         </h1>
         {subtitle && (
-          <p className="text-sm text-gray-500 mt-1">{subtitle}</p>
+          // Use a <div> instead of <p> so callers can pass block-level
+          // children (e.g. <Skeleton /> renders a <div>). HTML spec
+          // forbids block elements inside <p>, which causes React
+          // hydration errors.
+          <div className="text-sm text-gray-500 mt-1">{subtitle}</div>
         )}
       </div>
 
