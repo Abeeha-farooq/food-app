@@ -1,33 +1,30 @@
 // api/handler.js
 // ===============================
 // Purpose: Vercel serverless entry point. Handles ALL /api/* requests
-// via an explicit rewrite in vercel.json (no catch-all pattern, no
-// brackets in the filename — maximum compatibility).
-//
-// How requests reach this file:
-//   vercel.json has a rewrite:  /api/:path*  →  /api/handler
-//   Vercel preserves the original URL when calling the function, so
-//   req.url is the full path (e.g. "/api/auth/login") and Express
-//   routes it normally via its /api/* middleware prefixes.
-//
-// Why a simple filename (not [..slug] or [...slug]):
-//   Vercel's catch-all filename patterns are sometimes silently
-//   dropped during bundling — no error, just no function. Using a
-//   plain filename + explicit rewrite is the most reliable pattern.
-//
-// Imports:
-//   "./server/server.js" resolves to api/server/server.js after the
-//   build step (scripts/copy-server.js runs first in buildCommand).
+// via an explicit rewrite in vercel.json.
 // ===============================
 
 import app from "./server/server.js";
 
-// Vercel runtime expects a default export shaped as (req, res) => any.
 export default (req, res) => {
-  // TEMP DEBUG (remove after 404 is fixed) — visible in Vercel Logs
+  // === TEMP DEBUG LOGGING (delete after 504 is fixed) ===
+  const t0 = Date.now();
   console.log(
-    `[api] ${req.method} ${req.url} | host=${req.headers?.host}`
+    `[handler] ENTER ${req.method} ${req.url} | ` +
+    `MONGO_URI set=${Boolean(process.env.MONGO_URI)} | ` +
+    `NODE_ENV=${process.env.NODE_ENV}`
   );
+
+  // Wrap res.end to log when the function actually finishes responding
+  const origEnd = res.end.bind(res);
+  res.end = function (...args) {
+    console.log(
+      `[handler] EXIT  ${req.method} ${req.url} | ` +
+      `status=${res.statusCode} | total=${Date.now() - t0}ms`
+    );
+    return origEnd(...args);
+  };
+  // === END DEBUG LOGGING ===
 
   return app(req, res);
 };

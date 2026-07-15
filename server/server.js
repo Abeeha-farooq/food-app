@@ -43,14 +43,25 @@ const PORT = process.env.PORT || 5000;
 // the request body to be a raw stream, not parsed) and the root health
 // check. We do this by mounting connectDB AFTER those routes, below.
 app.use(async (req, res, next) => {
+  // === DEBUG LOGGING (delete after 504 is fixed) ===
+  const reqStart = Date.now();
+  console.log(`[mw] ${req.method} ${req.path} — entering connectDB middleware`);
+  // === END DEBUG LOGGING ===
+
   // Health check — Vercel pings this for cold-start detection
   if (req.path === "/" && req.method === "GET") return next();
   // Stripe webhook — must receive the raw body for signature verification
   if (req.path === "/api/payments/webhook" && req.method === "POST") return next();
   try {
     await connectDB();
+    // === DEBUG LOGGING ===
+    console.log(`[mw] ${req.method} ${req.path} — connectDB done in ${Date.now() - reqStart}ms, calling next()`);
+    // === END DEBUG LOGGING ===
     next();
   } catch (err) {
+    // === DEBUG LOGGING ===
+    console.error(`[mw] ${req.method} ${req.path} — connectDB THREW after ${Date.now() - reqStart}ms: ${err.message}`);
+    // === END DEBUG LOGGING ===
     next(err);
   }
 });
