@@ -6,6 +6,7 @@
   "engines": {
     "node": "24.x"
   },
+  "comment": "Vercel serverless function entry. This package.json lists the server's dependencies so Vercel can install them in api/node_modules and the function bundler can resolve them. Keep this in sync with server/package.json's dependencies block — they're the same set.",
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",

@@ -95,6 +95,19 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // ----- Payment processor linkage -----
+    // We track WHICH processor the order paid through so refunds,
+    // reconciliation, and disputes all go to the right system.
+    //
+    //   - "stripe" → stripePaymentIntentId is set
+    //   - "paypal" → paypalOrderId + paypalCaptureId are set
+    //   - "cash"   → none of the above (order paid on delivery)
+    paymentMethod: {
+      type: String,
+      enum: ["stripe", "paypal", "cash"],
+      default: "cash",
+    },
+
     // ----- Stripe payment linkage -----
     // We store Stripe's PaymentIntent ID for orders paid online so we
     // can look up / refund / verify the charge later. Cash-on-delivery
@@ -103,6 +116,26 @@ const orderSchema = new mongoose.Schema(
       type: String,
       default: "",
       index: true,        // indexed — lookups by intent ID happen on refunds
+    },
+
+    // ----- PayPal payment linkage -----
+    // Three IDs because PayPal's flow has three distinct resources:
+    //   - paypalOrderId:    the "order" the customer approved (lifecycle: CREATED → APPROVED → COMPLETED)
+    //   - paypalPayerId:    the buyer's PayPal account ID (for refunds + disputes)
+    //   - paypalCaptureId:  the actual "capture" (the money-moving event) — needed for refunds
+    // All three are populated ONLY when the order was paid via PayPal.
+    paypalOrderId: {
+      type: String,
+      default: "",
+      index: true,        // indexed — lookups happen on refunds and webhook reconciliation
+    },
+    paypalPayerId: {
+      type: String,
+      default: "",
+    },
+    paypalCaptureId: {
+      type: String,
+      default: "",
     },
   },
   { timestamps: true }

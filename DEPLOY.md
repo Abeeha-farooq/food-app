@@ -129,7 +129,55 @@ If you want Stripe to send payment events to your deployed API:
 5. Go back to **Vercel** → Project → Settings → Environment Variables → add `STRIPE_WEBHOOK_SECRET` = the signing secret
 6. Save → Vercel auto-redeploys the API with the new env var
 
-### Step 6: Custom domain (optional)
+### Step 6: Set up PayPal (optional, 10 min)
+
+PayPal is an alternative to Stripe. The app supports both — customers pick at checkout. You'll need a PayPal Business account.
+
+**A. Get PayPal credentials**
+
+1. Go to https://developer.paypal.com/dashboard/applications/sandbox
+2. Log in with your PayPal Business account
+3. Click **Create App** → name it (e.g. "FoodApp") → select **Merchant** under Type → Create
+4. You'll see **Client ID** and **Secret** — copy both
+
+**B. Add PayPal env vars to Vercel**
+
+Vercel → flavourcourt → Settings → Environment Variables → add these (Production + Preview):
+
+| Key | Value | Sandbox or Live? |
+|---|---|---|
+| `PAYPAL_MODE` | `sandbox` (during testing) or `live` (production) | — |
+| `PAYPAL_CLIENT_ID` | from step A.4 | sandbox or live |
+| `PAYPAL_CLIENT_SECRET` | from step A.4 | sandbox or live |
+| `VITE_PAYPAL_CLIENT_ID` | **the same Client ID as above** (this is the public one for the browser) | sandbox or live |
+
+**C. Test in sandbox mode**
+
+1. With `PAYPAL_MODE=sandbox` + sandbox credentials, deploy
+2. Open your live site → go to checkout → pick "PayPal" → click the PayPal button
+3. The PayPal **sandbox** popup opens. Use PayPal's test buyer account to approve (PayPal provides these in the Developer dashboard under **Sandbox → Accounts**)
+4. Order is placed with `paymentMethod: "paypal"` in the DB
+
+**D. Set up PayPal webhook (optional, for refunds/disputes)**
+
+1. PayPal Developer Dashboard → your app → **Webhooks** → **Add Webhook**
+2. URL: `https://foodapp-abc123.vercel.app/api/payments/paypal/webhook`
+3. Events to subscribe:
+   - `PAYMENT.CAPTURE.COMPLETED`
+   - `PAYMENT.CAPTURE.REFUNDED`
+   - `CUSTOMER.DISPUTE.CREATED`
+4. Click **Save** → copy the **Webhook ID** shown
+5. Vercel → Environment Variables → add `PAYPAL_WEBHOOK_ID` = the Webhook ID
+6. Save → Vercel auto-redeploys
+
+**E. Go live (when ready for real money)**
+
+1. PayPal Developer Dashboard → your app → toggle to **Live** tab
+2. Get the **Live** Client ID and Secret
+3. Update `PAYPAL_MODE=live`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `VITE_PAYPAL_CLIENT_ID` in Vercel env vars
+4. Re-register the webhook with the live URL
+
+### Step 7: Custom domain (optional)
 
 - **Vercel:** Project → Settings → Domains → add your domain. Free HTTPS auto-issued.
 

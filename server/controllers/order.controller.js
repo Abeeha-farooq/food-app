@@ -7,50 +7,90 @@ import Order from "../models/order.model.js";
 import MenuItem from "../models/menu.model.js";
 import Restaurant from "../models/restaurant.model.js";
 import { verifyPayment } from "./payment.controller.js";
+import { verifyPayPalPayment } from "./paypal.controller.js";
 import ApiError from "../utils/apiError.js";
 import ApiResponse from "../utils/apiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 
 // POST /api/orders — place a new order
 export const placeOrder = asyncHandler(async (req, res) => {
-  const { restaurantId, items, deliveryAddress, paymentStatus, stripePaymentIntentId } = req.body;
+  const {
+    restaurantId,
+    items,
+    deliveryAddress,
+    paymentStatus,
+    paymentMethod,           // "stripe" | "paypal" | "cash" — tells us which processor to verify with
+    stripePaymentIntentId,   // set when paymentMethod === "stripe"
+    paypalOrderId,           // set when paymentMethod === "paypal"
+    paypalPayerId,           // set when paymentMethod === "paypal"
+    paypalCaptureId,         // set when paymentMethod === "paypal" (from /capture response)
+  } = req.body;
 
   if (!restaurantId || !Array.isArray(items) || items.length === 0 || !deliveryAddress) {
     throw new ApiError(400, "restaurantId, items[], and deliveryAddress are required");
   }
 
-  // ----- STRIPE PAYMENT VERIFICATION -----
-  // If the client claims paymentStatus="paid", we MUST have a
-  // stripePaymentIntentId AND we MUST verify it with Stripe before
-  // saving the order. Never trust the client to tell us payment
-  // succeeded — always re-check with the payment provider.
+  // ----- PAYMENT VERIFICATION (defense-in-depth) -----
+  // If the client claims paymentStatus="paid", we MUST verify with the
+  // actual payment processor before saving the order. Never trust the
+  // client's word — always re-check with Stripe/PayPal.
   //
-  // The amount we verify against must also match our order total —
-  // otherwise a malicious client could pay Rs. 1 and claim a Rs. 1850
-  // order was paid. We compute totalPrice BEFORE verifying, so we can
-  // check it matches.
+  // Why we verify HERE (in addition to the webhook):
+  //   1. Webhooks can be delayed/lost — synchronous verification gives
+  //      the customer immediate feedback ("payment failed, try again")
+  //   2. Defense against a malicious client that fakes a paymentStatus
+  //   3. We also catch amount tampering: client claims they paid $18.50
+  //      but their order's true total is $185.00
+  //
+  // The amount we verify against is computed from the server-side menu
+  // prices (see below), NEVER from the client's claimed total.
   let stripePaymentIntent = null;
-  if (paymentStatus === "paid") {
-    if (!stripePaymentIntentId) {
-      throw new ApiError(400, "paymentStatus='paid' requires a stripePaymentIntentId");
-    }
-    stripePaymentIntent = await verifyPayment(stripePaymentIntentId);
+  let paypalOrder = null;
 
-    // status can be: "requires_payment_method" | "requires_confirmation" |
-    //                "requires_action" | "processing" | "requires_capture" |
-    //                "canceled" | "succeeded"
-    // Only "succeeded" means we actually have the money.
-    if (stripePaymentIntent.status !== "succeeded") {
+  if (paymentStatus === "paid") {
+    // The client MUST tell us which processor they used so we know
+    // which verification path to take.
+    if (paymentMethod === "stripe") {
+      if (!stripePaymentIntentId) {
+        throw new ApiError(400, "paymentStatus='paid' with paymentMethod='stripe' requires stripePaymentIntentId");
+      }
+      stripePaymentIntent = await verifyPayment(stripePaymentIntentId);
+
+      // status can be: "requires_payment_method" | "requires_confirmation" |
+      //                "requires_action" | "processing" | "requires_capture" |
+      //                "canceled" | "succeeded"
+      // Only "succeeded" means we actually have the money.
+      if (stripePaymentIntent.status !== "succeeded") {
+        throw new ApiError(
+          402,
+          `Payment not completed (Stripe status: ${stripePaymentIntent.status}). Please complete payment and try again.`
+        );
+      }
+    } else if (paymentMethod === "paypal") {
+      if (!paypalOrderId) {
+        throw new ApiError(400, "paymentStatus='paid' with paymentMethod='paypal' requires paypalOrderId");
+      }
+      // Re-fetch the PayPal order to confirm it actually completed.
+      // (PayPal capture is synchronous, so by the time /capture returns
+      // 200 to the client, the status is COMPLETED. This re-fetch is
+      // belt-and-suspenders in case the client lies or the network is weird.)
+      paypalOrder = await verifyPayPalPayment(paypalOrderId);
+
+      if (paypalOrder.status !== "COMPLETED") {
+        throw new ApiError(
+          402,
+          `Payment not completed (PayPal status: ${paypalOrder.status}). Please complete payment and try again.`
+        );
+      }
+    } else {
+      // paymentStatus="paid" but no recognized processor — reject.
+      // This catches both "cash" + "paid" (nonsense) and any unknown
+      // paymentMethod value an attacker might inject.
       throw new ApiError(
-        402,
-        `Payment not completed (Stripe status: ${stripePaymentIntent.status}). Please complete payment and try again.`
+        400,
+        "paymentStatus='paid' requires paymentMethod to be 'stripe' or 'paypal'"
       );
     }
-
-    // Defense-in-depth: ensure the intent's currency matches what we
-    // expect (PKR) and the amount is at least our total. Stripe
-    // returns amount in the smallest currency unit (paisa), same as
-    // we sent in. We compare AFTER we compute totalPrice below.
   }
 
   // Make sure the restaurant exists
@@ -114,6 +154,22 @@ export const placeOrder = asyncHandler(async (req, res) => {
     }
   }
 
+  // Same check for PayPal: the captured amount must be at least our
+  // computed total. PayPal uses regular currency units (e.g. 18.50
+  // dollars), NOT smallest-unit (cents), so we compare directly.
+  if (paypalOrder) {
+    const capture = paypalOrder.purchase_units?.[0]?.payments?.captures?.[0];
+    if (capture) {
+      const capturedAmount = parseFloat(capture.amount.value);
+      if (capturedAmount < totalPrice) {
+        throw new ApiError(
+          402,
+          `PayPal amount (${capturedAmount} ${capture.amount.currency_code}) is less than order total (${totalPrice}). Possible tampering — order refused.`
+        );
+      }
+    }
+  }
+
   const order = await Order.create({
     user: req.user._id,
     restaurant: restaurantId,
@@ -124,7 +180,13 @@ export const placeOrder = asyncHandler(async (req, res) => {
     deliveryAddress,
     status: "placed",
     paymentStatus: finalPaymentStatus,
+    // Payment processor linkage — exactly one of these is populated
+    // depending on paymentMethod. "cash" orders leave them all empty.
+    paymentMethod: paymentMethod || "cash",
     stripePaymentIntentId: stripePaymentIntent?.id || "",
+    paypalOrderId: paypalOrderId || "",
+    paypalPayerId: paypalPayerId || "",
+    paypalCaptureId: paypalCaptureId || "",
   });
 
   return res.status(201).json(new ApiResponse(201, order, "Order placed successfully"));

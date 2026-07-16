@@ -44,14 +44,12 @@ import {
   ArrowUpDown,
   SlidersHorizontal,
   X,
-  UtensilsCrossed,
   Clock,
   ChevronRight,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Badge } from "@/components/ui/badge";
-import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import axios from "axios";
@@ -269,22 +267,6 @@ const SearchPage = () => {
           "py-6 md:py-10 xl:py-12"
         )}
       >
-        {/* ============== Page header ============== */}
-        <PageHeader
-          icon={<UtensilsCrossed className="text-orange-500" />}
-          title="Restaurants"
-          subtitle={
-            loading
-              ? "Loading restaurants…"
-              : `${sortedRestaurants.length} ${
-                  sortedRestaurants.length === 1 ? "restaurant" : "restaurants"
-                } found`
-          }
-          // Section Y gap — scales from 24 (mobile) to 40 (desktop).
-          // Bigger gap on desktop makes the page feel less cramped and
-          // matches the increased outer padding.
-          className="mb-6 md:mb-8 lg:mb-10"
-        />
 
         {/* ============== Toolbar (search + sort + mobile filter) ============== */}
         <div

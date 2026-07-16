@@ -61,13 +61,20 @@ import {
   useStripe,
 } from "@stripe/react-stripe-js";
 
+// PayPal — official React wrapper. Loads the PayPal SDK script
+// automatically and provides <PayPalButtons /> as a drop-in component.
+// We only render the provider if VITE_PAYPAL_CLIENT_ID is set, so the
+// app gracefully handles "PayPal not configured" the same way it
+// handles "Stripe not configured".
+import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
+
 // ============================================================
 // TYPES
 // ============================================================
 
-// The three payment methods. "card" and "wallet" both use Stripe;
-// the difference is just the UI label.
-type PaymentMethod = "cash" | "card" | "wallet";
+// The four payment methods. "card" and "wallet" both use Stripe;
+// "paypal" uses PayPal Smart Buttons; "cash" is pay-on-delivery.
+type PaymentMethod = "cash" | "card" | "wallet" | "paypal";
 
 // Shape of the order returned by POST /api/orders.
 interface PlacedOrder {
@@ -88,6 +95,10 @@ interface PlacedOrder {
 // render a "Stripe not configured" banner instead of the form.
 const STRIPE_PUBLISHABLE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
 const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
+
+// PayPal client ID. If missing, we render a "PayPal not configured"
+// banner instead of the PayPal buttons.
+const PAYPAL_CLIENT_ID = import.meta.env.VITE_PAYPAL_CLIENT_ID;
 
 // ============================================================
 // COMPONENT
@@ -159,8 +170,17 @@ const CheckoutPage = () => {
     }
 
     if (paymentMethod === "cash") {
-      // Cash on delivery — no Stripe interaction. Go straight to order creation.
-      await placeOrder(null);
+      // Cash on delivery — no Stripe/PayPal interaction. Go straight to order creation.
+      await placeOrder({ paymentMethod: "cash" });
+      return;
+    }
+
+    if (paymentMethod === "paypal") {
+      // PayPal has its own Smart Buttons flow — see the PayPalCheckout
+      // component rendered in the "paying" phase. This button doesn't
+      // advance to "paying" for PayPal; the PayPal buttons handle everything.
+      toast.info("Click the PayPal button below to complete payment");
+      setPhase("paying");
       return;
     }
 
@@ -186,9 +206,18 @@ const CheckoutPage = () => {
   };
 
   // ----- The actual order placement (called after payment succeeds) -----
-  // stripePaymentIntentId is passed when the user paid online. The
-  // server uses it to verify the payment with Stripe before saving.
-  const placeOrder = async (stripePaymentIntentId: string | null) => {
+  // For Stripe: pass the PaymentIntent ID
+  // For PayPal: pass the order/capture/payer IDs (from the capture response)
+  // For cash: pass null for everything; paymentStatus will be "pending"
+  // The server uses these IDs to verify the payment with the processor
+  // before saving the order. This is the defense-in-depth check.
+  const placeOrder = async (paymentData: {
+    paymentMethod: "stripe" | "paypal" | "cash";
+    stripePaymentIntentId?: string | null;
+    paypalOrderId?: string;
+    paypalPayerId?: string;
+    paypalCaptureId?: string;
+  }) => {
     setPhase("submitting");
     try {
       const restaurantId = items[0]?.restaurantId;
@@ -203,8 +232,12 @@ const CheckoutPage = () => {
         })),
         deliveryAddress: deliveryAddress.trim(),
         paymentStatus:
-          paymentMethod === "cash" ? "pending" : "paid",
-        stripePaymentIntentId,  // null for cash orders
+          paymentData.paymentMethod === "cash" ? "pending" : "paid",
+        paymentMethod: paymentData.paymentMethod,
+        stripePaymentIntentId: paymentData.stripePaymentIntentId || undefined,
+        paypalOrderId: paymentData.paypalOrderId || undefined,
+        paypalPayerId: paymentData.paypalPayerId || undefined,
+        paypalCaptureId: paymentData.paypalCaptureId || undefined,
       });
       setPlacedOrder(res.data.data);
       clearCart();
@@ -377,6 +410,18 @@ const CheckoutPage = () => {
                   onSelect={() => setPaymentMethod("wallet")}
                   disabled={phase !== "form"}
                 />
+                <PaymentOption
+                  // PayPal uses a separate icon (lucide doesn't have
+                  // an official PayPal icon, so we use a generic wallet
+                  // icon — PayPal renders its own branded button inside
+                  // the popup).
+                  icon={<Wallet className="w-6 h-6 text-blue-600" />}
+                  label="PayPal"
+                  description="Pay with your PayPal account"
+                  selected={paymentMethod === "paypal"}
+                  onSelect={() => setPaymentMethod("paypal")}
+                  disabled={phase !== "form"}
+                />
               </div>
             </CardContent>
           </Card>
@@ -414,10 +459,125 @@ const CheckoutPage = () => {
                   }}
                 >
                   <StripePaymentForm
-                    onSuccess={placeOrder}
+                    onSuccess={(paymentIntentId) =>
+                      placeOrder({
+                        paymentMethod: "stripe",
+                        stripePaymentIntentId: paymentIntentId,
+                      })
+                    }
                     onBack={() => setPhase("form")}
                   />
                 </Elements>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* ----- PayPal Smart Buttons (only for paypal method) ----- */}
+          {/* Same idea as the Stripe block above, but using the PayPal
+              SDK's React wrapper. The flow:
+                1. User clicks "PayPal" (we toggle paymentMethod to "paypal")
+                2. handleContinue() moves us to "paying" phase
+                3. The PayPal button renders here. createOrder hits our
+                   /api/payments/paypal/create-order endpoint, which talks
+                   to PayPal's Orders API and returns an order ID.
+                4. PayPal opens its popup. User authorizes.
+                5. onApprove fires with the order ID. We POST
+                   /api/payments/paypal/capture to capture the funds.
+                6. Then we POST /api/orders with the PayPal IDs — the
+                   server re-verifies with PayPal before saving. */}
+          {phase === "paying" && paymentMethod === "paypal" && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Lock className="w-5 h-5 text-green-600" />
+                  Pay with PayPal
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {PAYPAL_CLIENT_ID ? (
+                  // PayPalScriptProvider loads the PayPal SDK script.
+                  // We disable the buttons during submitting/confirmed
+                  // to prevent double-clicks.
+                  <PayPalScriptProvider
+                    options={{
+                      // Note: the React wrapper's types expect camelCase
+                      // "clientId" (the HTML attribute is "client-id" but
+                      // the React prop normalizes it).
+                      clientId: PAYPAL_CLIENT_ID,
+                      currency: "USD",
+                      intent: "capture",
+                    }}
+                  >
+                    <PayPalButtons
+                      style={{ layout: "vertical", color: "gold", shape: "rect", label: "pay" }}
+                      // createOrder: ask OUR server to create a PayPal
+                      // order. Returns the PayPal order ID. We pass the
+                      // total in DOLLARS (PayPal's API uses regular
+                      // currency units, NOT cents like Stripe).
+                      createOrder={async () => {
+                        try {
+                          const res = await api.post("/payments/paypal/create-order", {
+                            amount: grandTotal,  // already in dollars
+                            currency: "USD",
+                          });
+                          return res.data.data.orderId;
+                        } catch (err) {
+                          toast.error(getErrorMessage(err));
+                          throw err;
+                        }
+                      }}
+                      // onApprove: the user has authorized in the PayPal
+                      // popup. We capture the payment (move money), then
+                      // place the order.
+                      onApprove={async (data) => {
+                        try {
+                          // 1. Capture the payment (server hits PayPal's
+                          //    /capture endpoint, moves money, returns
+                          //    captureId + payerId for storage).
+                          const captureRes = await api.post("/payments/paypal/capture", {
+                            orderId: data.orderID,
+                          });
+                          const { captureId, payerId } = captureRes.data.data;
+
+                          // 2. Place the order with all the PayPal IDs
+                          //    so the server can re-verify and store them.
+                          await placeOrder({
+                            paymentMethod: "paypal",
+                            paypalOrderId: data.orderID,
+                            paypalPayerId: payerId,
+                            paypalCaptureId: captureId,
+                          });
+                        } catch (err) {
+                          toast.error(getErrorMessage(err));
+                          setPhase("form");
+                        }
+                      }}
+                      // onError: PayPal itself errored (network, SDK init, etc.)
+                      onError={(err) => {
+                        console.error("[paypal] error:", err);
+                        toast.error("PayPal error. Please try again or use a different payment method.");
+                        setPhase("form");
+                      }}
+                      // onCancel: user closed the PayPal popup without approving
+                      onCancel={() => {
+                        toast.info("PayPal payment cancelled");
+                        setPhase("form");
+                      }}
+                    />
+                  </PayPalScriptProvider>
+                ) : (
+                  // PayPal not configured — show a friendly warning
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+                    PayPal is not configured. Add <code className="bg-amber-100 px-1 rounded">VITE_PAYPAL_CLIENT_ID</code> to your client env vars to enable PayPal payments.
+                  </div>
+                )}
+                <Button
+                  variant="ghost"
+                  onClick={() => setPhase("form")}
+                  className="w-full"
+                >
+                  Back to checkout
+                </Button>
               </CardContent>
             </Card>
           )}
@@ -592,6 +752,11 @@ const StripePaymentForm = ({
   onSuccess: (paymentIntentId: string) => Promise<void>;
   onBack: () => void;
 }) => {
+  // NOTE: onSuccess still takes a string (the Stripe paymentIntentId)
+  // because that's all Stripe knows about. The parent component
+  // adapts this to the unified payment object for the order API.
+  // We keep this signature narrow so StripePaymentForm only knows
+  // about Stripe — it doesn't need to know about PayPal.
   const stripe = useStripe();
   const elements = useElements();
   const [isPaying, setIsPaying] = useState(false);

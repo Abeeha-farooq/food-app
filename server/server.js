@@ -52,6 +52,8 @@ app.use(async (req, res, next) => {
   if (req.path === "/" && req.method === "GET") return next();
   // Stripe webhook — must receive the raw body for signature verification
   if (req.path === "/api/payments/webhook" && req.method === "POST") return next();
+  // PayPal webhook — same reason
+  if (req.path === "/api/payments/paypal/webhook" && req.method === "POST") return next();
   try {
     await connectDB();
     // === DEBUG LOGGING ===
@@ -105,11 +107,16 @@ app.use(
   })
 );
 
-// IMPORTANT: Stripe webhook must receive the RAW request body
-// (signature verification fails on parsed JSON). We mount it BEFORE
-// the json() middleware so the body stream is still intact.
+// IMPORTANT: Stripe and PayPal webhooks must receive the RAW request
+// body (signature verification fails on parsed JSON). We mount them
+// BEFORE the json() middleware so the body stream is still intact.
 app.post(
   "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
+  paymentRoutes
+);
+app.post(
+  "/api/payments/paypal/webhook",
   express.raw({ type: "application/json" }),
   paymentRoutes
 );
