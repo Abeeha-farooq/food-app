@@ -90,12 +90,15 @@ const UserManagement = () => {
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      // We'll need a GET /api/admin/users endpoint. For now, let's
-      // assume it exists (we'll add it if missing).
+      // Server response shape (ApiResponse wrapper):
+      //   { statusCode, data: { users, total, page, limit, totalPages }, message }
+      // We need the inner `data.users` array — `data` itself is an object.
       const res = await api.get("/admin/users");
-      setUsers(res.data.data || []);
+      const payload = res.data?.data;
+      setUsers(Array.isArray(payload?.users) ? payload.users : []);
     } catch (err) {
       toast.error(getErrorMessage(err));
+      setUsers([]); // avoid leaving stale state from a previous load
     } finally {
       setLoading(false);
     }

@@ -20,75 +20,97 @@
    overrides get the whole app dark mode working in one shot.
    ============================================================ */
 
-.dark {
-  /* --- Backgrounds --- */
-  .bg-white {
-    background-color: rgb(15 23 42) !important; /* slate-900 */
-  }
-  .bg-gray-50 {
-    background-color: rgb(30 41 59) !important; /* slate-800 */
-  }
-  .bg-gray-100 {
-    background-color: rgb(30 41 59) !important; /* slate-800 */
-  }
+/* ============================================================
+   DARK MODE OVERRIDES (FLAT — no CSS nesting)
+   ============================================================
+   The components throughout the app use HARDCODED Tailwind classes
+   (text-gray-900, bg-white, border-gray-200, etc.). Without these
+   overrides, switching to dark mode only changes a handful of
+   theme-aware elements — most of the UI stays light.
 
-  /* --- Text --- */
-  .text-gray-900 {
-    color: rgb(241 245 249) !important; /* slate-100 */
-  }
-  .text-gray-800 {
-    color: rgb(226 232 240) !important; /* slate-200 */
-  }
-  .text-gray-700 {
-    color: rgb(203 213 225) !important; /* slate-300 */
-  }
-  .text-gray-600 {
-    color: rgb(203 213 225) !important; /* slate-300 */
-  }
-  .text-gray-500 {
-    color: rgb(148 163 184) !important; /* slate-400 */
-  }
-  .text-gray-400 {
-    color: rgb(148 163 184) !important; /* slate-400 */
-  }
+   The rules below use `!important` to override Tailwind's class
+   definitions and apply the corresponding DARK color whenever the
+   `.dark` class is present on <html> (set by ThemeProvider.tsx).
 
-  /* --- Borders --- */
-  .border-gray-200 {
-    border-color: rgb(51 65 85) !important; /* slate-700 */
-  }
-  .border-gray-300 {
-    border-color: rgb(51 65 85) !important; /* slate-700 */
-  }
-  .border {
-    border-color: rgb(51 65 85) !important; /* default border in dark mode */
-  }
+   Important: We do NOT use CSS nesting here (.dark { .bg-white { ... } }).
+   Tailwind 3's PostCSS pipeline flattens nested selectors by prepending
+   the parent, which would emit `.dark .dark .bg-white` (two .dark
+   ancestors required) — a real bug we hit in prod. So everything is
+   written flat with `.dark` as a literal prefix.
 
-  /* --- Inputs (form fields, textareas, selects) --- */
-  input,
-  textarea,
-  select {
-    background-color: rgb(30 41 59) !important; /* slate-800 */
-    color: rgb(241 245 249) !important;            /* slate-100 */
-    border-color: rgb(51 65 85) !important;        /* slate-700 */
-  }
-  input::placeholder,
-  textarea::placeholder {
-    color: rgb(100 116 139) !important; /* slate-500 */
-  }
+   This is a pragmatic "sledgehammer" fix. The long-term answer is to
+   migrate each component to theme-aware classes (bg-background,
+   text-foreground, etc.) — but that touches ~50 files. These
+   overrides get the whole app dark mode working in one shot.
+   ============================================================ */
 
-  /* --- The body's own background --- */
-  body {
-    background-color: rgb(15 23 42) !important; /* slate-900 */
-    color: rgb(241 245 249) !important;            /* slate-100 */
-  }
+/* --- Backgrounds --- */
+.dark .bg-white {
+  background-color: rgb(15 23 42) !important; /* slate-900 */
+}
+.dark .bg-gray-50 {
+  background-color: rgb(30 41 59) !important; /* slate-800 */
+}
+.dark .bg-gray-100 {
+  background-color: rgb(30 41 59) !important; /* slate-800 */
+}
 
-  /* --- Hover/active states on light-bg surfaces --- */
-  .hover\:bg-gray-50:hover {
-    background-color: rgb(30 41 59) !important; /* slate-800 */
-  }
-  .hover\:bg-gray-100:hover {
-    background-color: rgb(30 41 59) !important; /* slate-800 */
-  }
+/* --- Text --- */
+.dark .text-gray-900 {
+  color: rgb(241 245 249) !important; /* slate-100 */
+}
+.dark .text-gray-800 {
+  color: rgb(226 232 240) !important; /* slate-200 */
+}
+.dark .text-gray-700 {
+  color: rgb(203 213 225) !important; /* slate-300 */
+}
+.dark .text-gray-600 {
+  color: rgb(203 213 225) !important; /* slate-300 */
+}
+.dark .text-gray-500 {
+  color: rgb(148 163 184) !important; /* slate-400 */
+}
+.dark .text-gray-400 {
+  color: rgb(148 163 184) !important; /* slate-400 */
+}
+
+/* --- Borders --- */
+.dark .border-gray-200 {
+  border-color: rgb(51 65 85) !important; /* slate-700 */
+}
+.dark .border-gray-300 {
+  border-color: rgb(51 65 85) !important; /* slate-700 */
+}
+.dark .border {
+  border-color: rgb(51 65 85) !important; /* default border in dark mode */
+}
+
+/* --- Inputs (form fields, textareas, selects) --- */
+.dark input,
+.dark textarea,
+.dark select {
+  background-color: rgb(30 41 59) !important; /* slate-800 */
+  color: rgb(241 245 249) !important;            /* slate-100 */
+  border-color: rgb(51 65 85) !important;        /* slate-700 */
+}
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: rgb(100 116 139) !important; /* slate-500 */
+}
+
+/* --- The body's own background --- */
+.dark body {
+  background-color: rgb(15 23 42) !important; /* slate-900 */
+  color: rgb(241 245 249) !important;            /* slate-100 */
+}
+
+/* --- Hover/active states on light-bg surfaces --- */
+.dark .hover\:bg-gray-50:hover {
+  background-color: rgb(30 41 59) !important; /* slate-800 */
+}
+.dark .hover\:bg-gray-100:hover {
+  background-color: rgb(30 41 59) !important; /* slate-800 */
 }
 
 /* ============================================================
