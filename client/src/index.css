@@ -3,6 +3,50 @@
 @tailwind utilities;
 
 /* ============================================================
+   CARET VISIBILITY
+   ============================================================
+   The blinking text-insertion caret should ONLY appear inside
+   actual text inputs / textareas / contenteditable regions where
+   typing is expected. Without these rules, a caret can appear
+   anywhere a browser decides an element is "editable" (focus
+   rings, focus-trap side effects in modals, third-party libs,
+   browser quirks) — which looks broken on a normal page.
+
+   Strategy:
+     1. Set caret-color to transparent on EVERY element. This
+        makes the caret invisible everywhere by default, so
+        even if some element accidentally becomes editable, no
+        caret flashes on the user's screen.
+     2. Re-enable caret-color: auto on real text input elements
+        only. The auto value uses the current text color so the
+        caret matches the surrounding text (e.g. dark text → dark
+        caret in light mode).
+
+   Specificity note:
+     - `*` selector has specificity (0,0,0)
+     - The input/textarea selectors have specificity (0,0,1) each
+     The input rule wins for those elements; everything else
+     inherits the transparent value.
+
+   Why not just `:where(input)` to keep the input rule at (0,0,0)?
+     Because both rules would then have the same specificity and
+     source order would decide. The current approach is more
+     defensive: even if a future rule sets caret-color: auto on a
+     non-input, the input rule's higher specificity keeps the
+     transparent default for non-inputs.
+   ============================================================ */
+* {
+  caret-color: transparent;
+}
+
+input,
+textarea,
+[contenteditable="true"],
+[contenteditable=""] {
+  caret-color: auto;
+}
+
+/* ============================================================
    DARK MODE OVERRIDES
    ============================================================
    The components throughout the app use HARDCODED Tailwind classes
