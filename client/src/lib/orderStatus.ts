@@ -67,6 +67,19 @@ export interface Order {
   // contact (phone). `null` when no rider is assigned yet.
   // The customer sees this immediately on assignment (per the spec).
   rider?: { _id: string; fullname: string; contact: string } | null;
+  // ----- Rider snapshot (frozen at delivery) -----
+  // When the order transitions to "delivered", the server copies
+  // the rider's name + phone + a timestamp into this subdoc. For
+  // delivered orders, the customer-facing views display THIS (not
+  // the live `rider` ref) so the historical record can't drift
+  // when the rider's account later changes (rename, phone change,
+  // deletion, blacklist). The fields are all optional / nullable
+  // because the snapshot is only set on delivery.
+  riderSnapshot?: {
+    fullname: string | null;
+    contact: string | null;
+    capturedAt: string | null;   // ISO date
+  } | null;
   // ----- Review fields (set after the customer rates a delivered order) -----
   // All optional — undefined for orders that haven't been reviewed yet.
   rating?: number;          // 1-5
@@ -81,6 +94,57 @@ export interface Order {
   createdAt: string;
   updatedAt: string;
 }
+
+// ============================================================
+// RIDER INFO HELPER
+// ============================================================
+// Returns the name + phone that should be DISPLAYED for this order's
+// rider. For delivered orders, prefer the snapshot (the historical
+// record at the moment of delivery). For non-delivered orders, use
+// the live `rider` ref (the current assignment).
+//
+// Returns `null` when neither is available (no rider ever assigned).
+//
+// Why a helper and not inline `order.rider ?? order.riderSnapshot`?
+// Because we want the "snapshot wins if present and order is delivered"
+// rule in one place — every view (customer card, admin detail modal,
+// review modal) uses this same rule, and the conditional is non-trivial
+// (snapshot has nullable inner fields, not just null/undefined).
+export interface DisplayRiderInfo {
+  fullname: string;
+  contact: string;
+  // true if the data is from the snapshot (frozen at delivery),
+  // false if it's from the live `rider` ref (current assignment).
+  isFromSnapshot: boolean;
+}
+
+export const getDisplayRider = (order: Order): DisplayRiderInfo | null => {
+  // For delivered orders with a snapshot, use the snapshot. The
+  // snapshot fields are individually nullable, so we need to check
+  // each one (a malformed snapshot shouldn't crash the UI).
+  if (
+    order.status === "delivered" &&
+    order.riderSnapshot?.capturedAt &&
+    order.riderSnapshot.fullname
+  ) {
+    return {
+      fullname: order.riderSnapshot.fullname,
+      contact: order.riderSnapshot.contact || "",
+      isFromSnapshot: true,
+    };
+  }
+  // Otherwise use the live ref. The backend populates this for all
+  // GET endpoints (with fullname + contact), so a null/undefined
+  // rider means the order never had one assigned.
+  if (order.rider?.fullname) {
+    return {
+      fullname: order.rider.fullname,
+      contact: order.rider.contact || "",
+      isFromSnapshot: false,
+    };
+  }
+  return null;
+};
 
 // A single rider row in the "assign rider" dropdown. Returned by
 // GET /api/admin/riders/available, sorted by activeDeliveries asc

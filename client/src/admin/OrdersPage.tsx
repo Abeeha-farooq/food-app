@@ -39,6 +39,7 @@ import {
   type PaymentStatus,
   type Order,
   type AvailableRider,
+  getDisplayRider,
 } from "@/lib/orderStatus";
 
 // ============================================================
@@ -598,70 +599,93 @@ const OrderDetailModal = ({
             </InfoRow>
           )}
 
-          {/* Rider info — admin-only. Hidden for terminal statuses. */}
-          {canEdit && !isTerminal && (
-            <InfoRow icon={<Bike className="w-4 h-4" />} label="Rider">
-              {order.rider ? (
-                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                  <div className="flex-1">
-                    <div className="font-medium">{order.rider.fullname}</div>
-                    <div className="text-sm text-gray-500 flex items-center gap-1">
-                      <Phone className="w-3 h-3" />
-                      {order.rider.contact}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={unassigning}
-                      onClick={async () => {
-                        setUnassigning(true);
-                        try {
-                          await api.patch(`/orders/${order._id}/rider`, { riderId: null });
-                          toast.success("Rider unassigned");
-                          onRiderChanged();
-                        } catch (err) {
-                          toast.error(getErrorMessage(err));
-                        } finally {
-                          setUnassigning(false);
-                        }
-                      }}
-                    >
-                      {unassigning ? (
-                        <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                      ) : (
-                        <UserMinus className="w-4 h-4 mr-1" />
+          {/* Rider info — admin-only. Shown for ALL orders (including
+              terminal ones) so the admin can see "who delivered this"
+              on the historical record. The displayed name + phone use
+              the same snapshot-wins rule as the customer card
+              (getDisplayRider) so the two views stay in sync.
+
+              Action buttons (Unassign / Reassign) only show for
+              non-terminal orders — once delivered/cancelled, the
+              assignment is final and we just display the frozen info. */}
+          {canEdit && (() => {
+            const displayRider = getDisplayRider(order);
+            return (
+              <InfoRow
+                icon={<Bike className="w-4 h-4" />}
+                label={displayRider?.isFromSnapshot ? "Delivered by" : "Rider"}
+              >
+                {displayRider ? (
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <div className="flex-1">
+                      <div className="font-medium">{displayRider.fullname}</div>
+                      <div className="text-sm text-gray-500 flex items-center gap-1">
+                        <Phone className="w-3 h-3" />
+                        {displayRider.contact || "—"}
+                      </div>
+                      {displayRider.isFromSnapshot && order.riderSnapshot?.capturedAt && (
+                        <div className="text-xs text-gray-400 mt-0.5">
+                          frozen on {new Date(order.riderSnapshot.capturedAt).toLocaleDateString()}
+                        </div>
                       )}
-                      Unassign
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setRiderModal({ mode: "reassign" })}
-                    >
-                      Reassign
-                    </Button>
+                    </div>
+                    {!isTerminal && (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={unassigning}
+                          onClick={async () => {
+                            setUnassigning(true);
+                            try {
+                              await api.patch(`/orders/${order._id}/rider`, { riderId: null });
+                              toast.success("Rider unassigned");
+                              onRiderChanged();
+                            } catch (err) {
+                              toast.error(getErrorMessage(err));
+                            } finally {
+                              setUnassigning(false);
+                            }
+                          }}
+                        >
+                          {unassigning ? (
+                            <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                          ) : (
+                            <UserMinus className="w-4 h-4 mr-1" />
+                          )}
+                          Unassign
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setRiderModal({ mode: "reassign" })}
+                        >
+                          Reassign
+                        </Button>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-500 italic">No rider assigned yet</span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => setRiderModal({ mode: "assign" })}
-                    className="ml-auto"
-                  >
-                    <UserPlus className="w-4 h-4 mr-1" />
-                    Assign rider
-                  </Button>
-                </div>
-              )}
-            </InfoRow>
-          )}
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-500 italic">No rider assigned yet</span>
+                    {!isTerminal && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => setRiderModal({ mode: "assign" })}
+                        className="ml-auto"
+                      >
+                        <UserPlus className="w-4 h-4 mr-1" />
+                        Assign rider
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </InfoRow>
+            );
+          })()}
 
           {/* Restaurant info */}
           <InfoRow icon={<Store className="w-4 h-4" />} label="Restaurant">

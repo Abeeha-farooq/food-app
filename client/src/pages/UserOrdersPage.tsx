@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/status-badge";
 import { ReviewModal } from "@/components/ReviewModal";
 import api, { getErrorMessage } from "@/lib/api";
-import { type Order } from "@/lib/orderStatus";
+import { type Order, getDisplayRider } from "@/lib/orderStatus";
 import { toast } from "sonner";
 import {
   Package,
@@ -301,7 +301,7 @@ const UserOrdersPage = () => {
             isExpanded={expandedIds.has(order._id)}
             onToggle={() => toggleExpanded(order._id)}
             onRateRider={
-              order.status === "delivered" && order.rider && !order.riderRating
+              order.status === "delivered" && getDisplayRider(order) && !order.riderRating
                 ? () => openReviewForOrder(order._id)
                 : undefined
             }
@@ -315,19 +315,33 @@ const UserOrdersPage = () => {
       <ReviewModal
         order={
           currentReviewOrder
-            ? {
-                _id: currentReviewOrder._id,
-                restaurant: currentReviewOrder.restaurant,
-                items: currentReviewOrder.items,
-                totalPrice: currentReviewOrder.totalPrice,
-                // Pass the rider + existing ratings so the modal can
-                // render the rider section + the "you already rated"
-                // chips. The modal needs the actual user to know if
-                // a rider-rating section should appear.
-                rider: currentReviewOrder.rider ?? null,
-                existingFoodRating: currentReviewOrder.rating ?? null,
-                existingRiderRating: currentReviewOrder.riderRating ?? null,
-              }
+            ? (() => {
+                // Use the same "snapshot wins for delivered orders" rule
+                // the card uses, so the modal shows the same name the
+                // customer saw on the card.
+                const displayRider = getDisplayRider(currentReviewOrder);
+                return {
+                  _id: currentReviewOrder._id,
+                  restaurant: currentReviewOrder.restaurant,
+                  items: currentReviewOrder.items,
+                  totalPrice: currentReviewOrder.totalPrice,
+                  // Pass the rider + existing ratings so the modal can
+                  // render the rider section + the "you already rated"
+                  // chips. We use the display helper so the customer
+                  // rates the historical rider (the one who actually
+                  // delivered), not whoever's currently in the User
+                  // collection.
+                  rider: displayRider
+                    ? {
+                        _id: currentReviewOrder.rider?._id || "",
+                        fullname: displayRider.fullname,
+                        contact: displayRider.contact,
+                      }
+                    : null,
+                  existingFoodRating: currentReviewOrder.rating ?? null,
+                  existingRiderRating: currentReviewOrder.riderRating ?? null,
+                };
+              })()
             : null
         }
         open={!!currentReviewOrder}
@@ -419,40 +433,51 @@ const OrderCard = ({ order, isExpanded, onToggle, onRateRider }: OrderCardProps)
         )}
 
         {/* ----- Your rider card -----
-            Shown whenever an admin has assigned a rider to this order
-            (per the spec: visibility = "as soon as assigned"). The
-            phone is a `tel:` link so the customer can tap to call
+            Shown whenever this order has a rider (per the spec:
+            visibility = "as soon as assigned"). For DELIVERED orders
+            we use the snapshot (the name + phone as they were at
+            the moment of delivery) so the historical record doesn't
+            drift if the rider's account is later edited. For
+            non-delivered orders we use the live assignment.
+
+            The phone is a `tel:` link so the customer can tap to call
             directly on mobile. The whole card uses a distinctive
             blue tone so it stands out from the order info. */}
-        {order.rider && (
-          <div className="bg-blue-50 border border-blue-100 rounded-md p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                <Bike className="w-4 h-4 text-blue-700" />
+        {(() => {
+          const rider = getDisplayRider(order);
+          if (!rider) return null;
+          return (
+            <div className="bg-blue-50 border border-blue-100 rounded-md p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                  <Bike className="w-4 h-4 text-blue-700" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-blue-800">
+                    {rider.isFromSnapshot ? "Delivered by" : "Your rider"}
+                  </p>
+                  <p className="font-semibold text-gray-900 truncate">
+                    {rider.fullname}
+                  </p>
+                </div>
+                {/* If the customer already rated the rider, show the
+                    stars next to the name as a subtle reminder. */}
+                {order.riderRating ? (
+                  <StarRating value={order.riderRating} size="sm" />
+                ) : null}
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-blue-800">Your rider</p>
-                <p className="font-semibold text-gray-900 truncate">
-                  {order.rider.fullname}
-                </p>
-              </div>
-              {/* If the customer already rated the rider, show the
-                  stars next to the name as a subtle reminder. */}
-              {order.riderRating ? (
-                <StarRating value={order.riderRating} size="sm" />
-              ) : null}
+              {rider.contact && (
+                <a
+                  href={`tel:${rider.contact.replace(/\s+/g, "")}`}
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline transition-colors"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  {rider.contact}
+                </a>
+              )}
             </div>
-            {order.rider.contact && (
-              <a
-                href={`tel:${order.rider.contact.replace(/\s+/g, "")}`}
-                className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline transition-colors"
-              >
-                <Phone className="w-3.5 h-3.5" />
-                {order.rider.contact}
-              </a>
-            )}
-          </div>
-        )}
+          );
+        })()}
 
         {/* ----- "Rate your rider" CTA -----
             Shown only when the order is delivered + has a rider + the
@@ -460,7 +485,7 @@ const OrderCard = ({ order, isExpanded, onToggle, onRateRider }: OrderCardProps)
             entry point — the auto-popup only fires for orders with no
             food review, so this button lets the customer rate the
             rider retroactively after the food prompt is gone. */}
-        {order.status === "delivered" && order.rider && !order.riderRating && onRateRider && (
+        {order.status === "delivered" && getDisplayRider(order) && !order.riderRating && onRateRider && (
           <button
             type="button"
             onClick={onRateRider}

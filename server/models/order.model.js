@@ -85,6 +85,31 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // ----- Rider snapshot (frozen at delivery time) -----
+    // The `rider` field above is a live ObjectId reference — if the
+    // rider's account later changes (name edit, phone change, deletion,
+    // blacklist), the populated value would reflect the new data. That
+    // breaks the historical record: a delivered order's "delivered by"
+    // info should NOT silently change after the fact.
+    //
+    // When the order's status transitions to "delivered" (in the
+    // updateOrderStatus controller), we copy the rider's name +
+    // phone + a timestamp into this subdoc. The customer-facing views
+    // display the snapshot for delivered orders so the displayed
+    // name/phone is always the same as the moment of delivery.
+    //
+    // This field is ONLY set by the server (via the delivery transition)
+    // — clients never write to it. The shape mirrors what we populate
+    // on the live rider (fullname + contact) so the two are swappable
+    // in the UI.
+    riderSnapshot: {
+      fullname: { type: String, default: null },
+      contact: { type: String, default: null },
+      // When the snapshot was captured (= when the order was marked
+      // delivered). Useful for audit / debugging.
+      capturedAt: { type: Date, default: null },
+    },
+
     // Payment status — separate from order status because they update independently.
     // Example: an order can be "delivered" with payment still "pending" (cash on delivery),
     // or "out_for_delivery" with payment "paid" (online).

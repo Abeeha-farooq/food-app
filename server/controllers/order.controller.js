@@ -246,6 +246,17 @@ export const getAllOrders = asyncHandler(async (req, res) => {
 });
 
 // PATCH /api/orders/:id/status — update status (admin/restaurant_owner)
+//
+// Side effect: when the new status is "delivered" AND the order has
+// an assigned rider AND no snapshot has been captured yet, we copy
+// the rider's current name + phone into `riderSnapshot`. This freezes
+// the historical "who delivered this" record on the order so it
+// can't drift if the rider's account changes later (rename, phone
+// change, deletion, blacklist, etc.).
+//
+// Idempotency: the `!order.riderSnapshot` guard means re-applying
+// "delivered" to an already-delivered order does NOT overwrite the
+// existing snapshot — first delivery wins.
 export const updateOrderStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
   const allowed = ["placed", "confirmed", "preparing", "out_for_delivery", "delivered", "cancelled"];
@@ -253,12 +264,42 @@ export const updateOrderStatus = asyncHandler(async (req, res) => {
     throw new ApiError(400, `Invalid status. Allowed: ${allowed.join(", ")}`);
   }
 
+  // Find first (we need the current state to decide whether to snapshot).
+  const existing = await Order.findById(req.params.id);
+  if (!existing) throw new ApiError(404, "Order not found");
+
+  // Build the update payload. Default = just the new status.
+  const update = { status };
+
+  // ----- Snapshot the rider on delivery -----
+  // Conditions:
+  //   1. Transitioning TO "delivered" (any other target status is
+  //      a no-op for the snapshot)
+  //   2. Order has a rider assigned
+  //   3. No snapshot has been captured yet (idempotency)
+  if (
+    status === "delivered" &&
+    existing.rider &&
+    !existing.riderSnapshot?.capturedAt
+  ) {
+    const rider = await User.findById(existing.rider).select("fullname contact");
+    if (rider) {
+      update.riderSnapshot = {
+        fullname: rider.fullname,
+        contact: rider.contact,
+        capturedAt: new Date(),
+      };
+    }
+    // If the rider was hard-deleted between assignment and delivery,
+    // we silently skip the snapshot. The order still progresses to
+    // delivered; there's just nothing to freeze. Rare edge case.
+  }
+
   const order = await Order.findByIdAndUpdate(
     req.params.id,
-    { status },
+    update,
     { new: true }
   );
-  if (!order) throw new ApiError(404, "Order not found");
 
   return res.status(200).json(new ApiResponse(200, order, "Order status updated"));
 });
