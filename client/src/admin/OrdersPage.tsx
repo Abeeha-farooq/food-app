@@ -25,7 +25,7 @@ import {
   OrderStatusBadge,
   PaymentStatusBadge,
 } from "@/components/ui/status-badge";
-import { Loader2, Search, X, ChevronRight, Calendar, User, Store, MapPin, DollarSign, ShoppingBag, Clock, CheckCircle2, Truck, Inbox, Bike, Phone, Star, UserPlus, UserMinus } from "lucide-react";
+import { Loader2, Search, X, ChevronRight, Calendar, User, Store, MapPin, DollarSign, ShoppingBag, Clock, CheckCircle2, Truck, Inbox, Bike, Phone, Star, UserPlus, UserMinus, AlertTriangle, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import api, { getErrorMessage } from "@/lib/api";
 import { useAuth } from "@/context/useAuth";
@@ -170,6 +170,60 @@ const OrdersPage = () => {
       // Non-fatal — the order is still updated server-side, we just
       // couldn't pull the fresh copy. A toast lets the admin know.
       toast.error("Couldn't refresh order — please reload");
+    }
+  };
+
+  // ============================================================
+  // ACCEPT / REJECT ORDER
+  // ============================================================
+  // These are dedicated admin actions for the initial "placed" state
+  // of an order. The endpoints are admin-only server-side.
+  //
+  // Accept: placed → confirmed. After this, the order is in the
+  //   "post-accept" flow and the admin can assign a rider.
+  // Reject: placed → cancelled. The customer can place a new order.
+  //
+  // We don't confirm with a modal — accept is positive (no
+  // destructive action), and reject is reversible (the order is
+  // just cancelled). A toast on success is enough.
+
+  const acceptOrder = async (orderId: string) => {
+    setUpdatingOrderId(orderId);
+    try {
+      const res = await api.post(`/orders/${orderId}/accept`);
+      // Update the list + the open modal in place
+      setOrders((prev) => prev.map((o) => (o._id === orderId ? res.data.data : o)));
+      if (selectedOrder?._id === orderId) {
+        setSelectedOrder(res.data.data);
+      }
+      toast.success("Order accepted");
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setUpdatingOrderId(null);
+    }
+  };
+
+  const rejectOrder = async (orderId: string) => {
+    // Confirm — rejection is destructive (cancels the order). The
+    // user can re-place, but we want to make sure admin didn't
+    // mis-click.
+    const ok = window.confirm(
+      "Reject this order?\n\nThe customer will see their order as cancelled and can place a new one."
+    );
+    if (!ok) return;
+    setUpdatingOrderId(orderId);
+    try {
+      const res = await api.post(`/orders/${orderId}/reject`);
+      setOrders((prev) => prev.map((o) => (o._id === orderId ? res.data.data : o)));
+      if (selectedOrder?._id === orderId) {
+        setSelectedOrder(res.data.data);
+      }
+      toast.success("Order rejected");
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setUpdatingOrderId(null);
     }
   };
 
@@ -440,6 +494,8 @@ const OrdersPage = () => {
           onClose={() => setSelectedOrder(null)}
           onUpdateStatus={updateStatus}
           onUpdatePaymentStatus={updatePaymentStatus}
+          onAcceptOrder={acceptOrder}
+          onRejectOrder={rejectOrder}
           updating={updatingOrderId === selectedOrder?._id}
           canEdit={isAdmin}
           onRiderChanged={() => refreshOrder(selectedOrder._id)}
@@ -481,12 +537,14 @@ const StatCard = ({
 
 // Detail modal — shows full order info + status/payment update controls (admin only)
 const OrderDetailModal = ({
-  order, onClose, onUpdateStatus, onUpdatePaymentStatus, updating, canEdit, onRiderChanged,
+  order, onClose, onUpdateStatus, onUpdatePaymentStatus, onAcceptOrder, onRejectOrder, updating, canEdit, onRiderChanged,
 }: {
   order: Order;
   onClose: () => void;
   onUpdateStatus: (id: string, status: OrderStatus) => void;
   onUpdatePaymentStatus: (id: string, paymentStatus: PaymentStatus) => void;
+  onAcceptOrder: (id: string) => void;
+  onRejectOrder: (id: string) => void;
   updating: boolean;
   canEdit: boolean;   // true only for admin
   onRiderChanged: () => void;
@@ -500,9 +558,12 @@ const OrderDetailModal = ({
   // `updating` because that flag is also driven by status changes).
   const [unassigning, setUnassigning] = useState(false);
 
-  // Terminal states where reassignment is forbidden by the backend.
-  // The user-facing buttons also check this, but we hide the entire
-  // rider section for these to keep the modal clean.
+  // State flags for the order lifecycle. We derive these from the
+  // current status so the UI can adapt to the right action set:
+  //   - isPlaced: order is awaiting admin accept/reject decision
+  //   - isTerminal: order is in a final state (delivered or cancelled)
+  //     — no further actions, just display
+  const isPlaced = order.status === "placed";
   const isTerminal = order.status === "delivered" || order.status === "cancelled";
 
   return (
@@ -544,10 +605,14 @@ const OrderDetailModal = ({
                 {STATUS_LABELS[order.status]}
               </span>
             </div>
-            {canEdit && (
+            {canEdit && !isPlaced && (
               <div className="md:ml-auto flex items-center gap-2">
                 <span className="text-sm text-gray-500">Update:</span>
-                {/* Only the 5 statuses the admin can set (no "confirmed") */}
+                {/* The status dropdown is hidden when the order is in
+                    "placed" — the dedicated Accept / Reject buttons
+                    below are the right action for that state. For
+                    all other statuses, the admin can manually
+                    transition. */}
                 <select
                   value={order.status}
                   disabled={updating}
@@ -562,6 +627,59 @@ const OrderDetailModal = ({
               </div>
             )}
           </div>
+
+          {/* ====== ACCEPT / REJECT buttons ======
+              Shown only when the order is in the "placed" state.
+              This is the primary way the admin handles new orders:
+                - Accept → status becomes "confirmed" (then the admin
+                  can assign a rider + the kitchen can start)
+                - Reject → status becomes "cancelled" (the customer
+                  can place a new order)
+              We hide the regular status dropdown above for placed
+              orders so the UI flow is unambiguous. */}
+          {canEdit && isPlaced && (
+            <div className="flex flex-col sm:flex-row gap-2 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+              <div className="flex-1 flex items-start gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-amber-800">
+                  <p className="font-medium">This order is awaiting your decision.</p>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    Accept to start preparation, or reject to cancel.
+                    You can assign a rider only after the order is accepted.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 sm:flex-shrink-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onRejectOrder(order._id)}
+                  disabled={updating}
+                  className="text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300"
+                >
+                  {updating ? (
+                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  ) : (
+                    <XCircle className="w-4 h-4 mr-1" />
+                  )}
+                  Reject
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => onAcceptOrder(order._id)}
+                  disabled={updating}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  {updating ? (
+                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 mr-1" />
+                  )}
+                  Accept order
+                </Button>
+              </div>
+            </div>
+          )}
 
           {/* ====== PAYMENT STATUS row (separate from order status) ====== */}
           <div className="flex flex-col md:flex-row md:items-center gap-3 p-4 bg-gray-50 rounded-lg">
@@ -669,8 +787,15 @@ const OrderDetailModal = ({
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-500 italic">No rider assigned yet</span>
-                    {!isTerminal && (
+                    <span className="text-sm text-gray-500 italic">
+                      {isPlaced
+                        ? "Accept the order to enable rider assignment"
+                        : "No rider assigned yet"}
+                    </span>
+                    {/* Assign button is hidden in two states:
+                          1. Order is in "placed" — admin must accept first
+                          2. Order is terminal (delivered/cancelled) */}
+                    {!isTerminal && !isPlaced && (
                       <Button
                         type="button"
                         size="sm"

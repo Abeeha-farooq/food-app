@@ -304,6 +304,104 @@ export const updateOrderStatus = asyncHandler(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, order, "Order status updated"));
 });
 
+// ============================================================
+// ACCEPT ORDER (admin approves the placed order)
+// ============================================================
+// POST /api/orders/:id/accept
+//
+// Transitions an order from "placed" → "confirmed". Only valid in
+// the "placed" state — once the order is past that, the admin uses
+// the regular status update endpoint (preparing, out_for_delivery,
+// delivered, cancelled).
+//
+// Why a dedicated endpoint (vs. letting the admin set status via the
+// generic PATCH /:id/status)?
+//   1. Clearer audit trail — the URL says "this is an acceptance
+//      decision" vs. "this is a status change"
+//   2. Future-proof — if we later add accept-specific fields (e.g.
+//      estimated prep time, internal notes) they live here without
+//      crowding the generic status endpoint
+//   3. The status update endpoint can stay admin + restaurant_owner
+//      (kitchen staff can advance the order through preparing →
+//      delivered), while accept/reject is admin-only (acceptance is
+//      a business decision, not a kitchen task)
+//
+// Idempotent: if the order is already "confirmed" (or past it), the
+// endpoint returns success without re-saving.
+export const acceptOrder = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const order = await Order.findById(id);
+  if (!order) throw new ApiError(404, "Order not found");
+
+  // Idempotency: if already past "placed" (i.e. confirmed or later),
+  // we treat the accept as a no-op success. Re-accepting a delivered
+  // order would be nonsensical, so we return the same shape.
+  if (order.status !== "placed") {
+    if (order.status === "cancelled") {
+      throw new ApiError(
+        400,
+        "Cannot accept a cancelled order. The customer will need to place a new one."
+      );
+    }
+    return res
+      .status(200)
+      .json(new ApiResponse(200, order, `Order is already "${order.status}"`));
+  }
+
+  order.status = "confirmed";
+  await order.save();
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, order, "Order accepted"));
+});
+
+// ============================================================
+// REJECT ORDER (admin declines the placed order)
+// ============================================================
+// POST /api/orders/:id/reject
+//
+// Transitions an order from "placed" → "cancelled". This is the
+// customer-facing equivalent of "your order was rejected" — they
+// can place a new one.
+//
+// Same justification as acceptOrder: dedicated endpoint for audit
+// trail + future expansion (rejection reason field, etc.).
+//
+// Only valid in the "placed" state. Once accepted, the order can
+// still be cancelled (via the generic status update) but it's
+// "cancelled" not "rejected" semantically.
+export const rejectOrder = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const order = await Order.findById(id);
+  if (!order) throw new ApiError(404, "Order not found");
+
+  // Idempotency: already cancelled → no-op success.
+  if (order.status === "cancelled") {
+    return res
+      .status(200)
+      .json(new ApiResponse(200, order, "Order is already cancelled"));
+  }
+
+  // If the order is past "placed" (e.g. already preparing), rejecting
+  // is no longer the right semantic — the admin should cancel with a
+  // different reason via the status endpoint. We block here to keep
+  // the "reject" action scoped to the initial decision.
+  if (order.status !== "placed") {
+    throw new ApiError(
+      400,
+      `Cannot reject an order with status "${order.status}". Use the status update to cancel it instead.`
+    );
+  }
+
+  order.status = "cancelled";
+  await order.save();
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, order, "Order rejected"));
+});
+
 // PATCH /api/orders/:id/payment — update payment status (admin/restaurant_owner)
 // Separate endpoint from the order-status one because they're independent fields.
 // An order can be "out_for_delivery" with payment "pending" (cash on delivery),
@@ -455,15 +553,21 @@ export const assignRider = asyncHandler(async (req, res) => {
   }
 
   // ----- 2. Order status sanity check -----
-  // We block assignment for terminal states — once delivered or
-  // cancelled, the order is done. Re-assigning is meaningless and
-  // could overwrite the audit trail.
-  const terminal = ["delivered", "cancelled"];
-  if (terminal.includes(order.status)) {
-    throw new ApiError(
-      400,
-      `Cannot (re)assign a rider for an order with status "${order.status}"`
-    );
+  // Block rider assignment for two kinds of states:
+  //   - "placed": admin hasn't accepted the order yet. Assignment is
+  //     meaningless before acceptance (the customer can't even see
+  //     the rider until the order is in the post-accept flow).
+  //   - "delivered" / "cancelled": terminal states. Re-assigning is
+  //     meaningless and could overwrite the audit trail.
+  const blocked = ["placed", "delivered", "cancelled"];
+  if (blocked.includes(order.status)) {
+    // Special-case message for "placed" — tells the admin exactly
+    // what to do (accept the order first).
+    const message =
+      order.status === "placed"
+        ? "Cannot assign a rider before the order is accepted. Accept the order first."
+        : `Cannot (re)assign a rider for an order with status "${order.status}"`;
+    throw new ApiError(400, message);
   }
 
   // ----- 3a. UNASSIGN path -----

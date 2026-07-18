@@ -9,6 +9,8 @@ import {
   updateOrderPayment,
   submitReview,
   assignRider,
+  acceptOrder,
+  rejectOrder,
 } from "../controllers/order.controller.js";
 import { verifyJWT, requireRole } from "../middlewares/auth.middleware.js";
 
@@ -32,8 +34,17 @@ router.get("/", requireRole("admin"), getAllOrders);
 router.patch("/:id/status",   requireRole("admin", "restaurant_owner"), updateOrderStatus);
 router.patch("/:id/payment", requireRole("admin", "restaurant_owner"), updateOrderPayment);
 
+// Accept / reject the initial order (admin-only).
+//   POST /:id/accept  — transitions "placed" → "confirmed"
+//   POST /:id/reject  — transitions "placed" → "cancelled"
+// Only valid from "placed" — see the controllers for the full rules.
+// After accept, the admin can assign a rider via PATCH /:id/rider.
+router.post("/:id/accept", requireRole("admin"), acceptOrder);
+router.post("/:id/reject", requireRole("admin"), rejectOrder);
+
 // Assign / unassign a rider to an order.
 // Admin-only — restaurant owners don't manage delivery staffing.
+// Only valid in the post-accept flow (status = confirmed or later).
 // Body: { riderId: string | null }
 router.patch("/:id/rider", requireRole("admin"), assignRider);
 

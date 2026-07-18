@@ -176,24 +176,27 @@ export const STATUS_COLORS: Record<OrderStatus, string> = {
   cancelled:        "bg-red-100 text-red-800 border-red-300",
 };
 
-// Human-readable status labels. "placed" displays as "Pending" because the
-// project's UX spec uses that terminology (Pending / Preparing / Out for
-// delivery / Delivered / Cancelled). The backend value stays "placed" so
-// the API contract doesn't change.
+// Human-readable status labels. "placed" displays as "Pending acceptance"
+// because the new admin-accept workflow makes the distinction important:
+// before acceptance, the order is queued for admin review; after, the
+// kitchen + rider flow takes over. The backend value stays "placed" so the
+// API contract doesn't change.
 export const STATUS_LABELS: Record<OrderStatus, string> = {
-  placed:           "Pending",
-  confirmed:        "Confirmed",
+  placed:           "Pending acceptance",
+  confirmed:        "Accepted",
   preparing:        "Preparing",
   out_for_delivery: "Out for delivery",
   delivered:        "Delivered",
   cancelled:        "Cancelled",
 };
 
-// The 5 statuses the admin can SET via the order-status update endpoint.
-// "confirmed" is intentionally excluded — the system auto-skips that stage
-// in this project's workflow.
+// The 6 statuses the admin can SET via the order-status update endpoint.
+// "confirmed" is now included — the dedicated Accept / Reject endpoints
+// are the typical path, but admins can still manually transition via the
+// status dropdown if they need to (e.g. correct a misclick).
 export const ADMIN_SETTABLE_STATUSES: OrderStatus[] = [
   "placed",
+  "confirmed",
   "preparing",
   "out_for_delivery",
   "delivered",
