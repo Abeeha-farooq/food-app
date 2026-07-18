@@ -2,6 +2,12 @@
 // ===============================
 // Admin user management — list, search, and blacklist / unblacklist users.
 //
+// Also handles rider management:
+//   - "Riders only" toggle filters the list to role=rider
+//   - Rider rows show Approve / Reject buttons (instead of Blacklist)
+//   - The "Pending" sub-tab shows only riders with isApproved=false
+//     so the admin can find them quickly
+//
 // Why this exists:
 //   Admins need a single place to see all users, see who's blacklisted,
 //   and suspend / restore accounts. The backend endpoints
@@ -12,9 +18,11 @@
 // What it does:
 //   - List all users with email, role, blacklist status, join date
 //   - Filter by "all" / "active" / "blacklisted" (tabs)
-//   - Search by name or email
+//   - Optionally narrow to "riders only"
 //   - "Blacklist" button on a user → opens a modal to enter a reason
 //   - "Unblacklist" button on a blacklisted user → immediate restore
+//   - "Approve" / "Reject" buttons on rider rows (visible when
+//     "Riders only" is on)
 // ===============================
 
 import { useEffect, useState, type FormEvent } from "react";
@@ -34,6 +42,10 @@ import {
   Calendar,
   RefreshCw,
   AlertTriangle,
+  Bike,
+  CheckCircle2,
+  XCircle,
+  Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { getErrorMessage } from "@/lib/api";
@@ -42,17 +54,24 @@ import { PageHeader } from "@/components/ui/page-header";
 // ============================================================
 // TYPES — match the backend User model
 // ============================================================
-type Role = "user" | "admin" | "restaurant_owner";
+type Role = "user" | "admin" | "restaurant_owner" | "rider";
 
 interface AdminUser {
   _id: string;
   fullname: string;
   email: string;
+  // The User model schema stores `contact` (phone). The list endpoint
+  // returns it on every user. We need it for the rider card and for
+  // displaying the rider's phone in the admin view.
+  contact?: string;
   role: Role;
   isBlacklisted: boolean;
   blacklistedAt?: string | null;
   blacklistedBy?: string | null;
   blacklistReason?: string;
+  // Rider approval — only relevant when role==="rider", but the field
+  // exists on every user (defaults to true so non-riders are unaffected).
+  isApproved?: boolean;
   createdAt: string;
 }
 
@@ -68,6 +87,14 @@ const UserManagement = () => {
   const [searchQuery, setSearchQuery] = useState("");
   // Filter tab: "all" | "active" | "blacklisted"
   const [filterTab, setFilterTab] = useState<"all" | "active" | "blacklisted">("all");
+  // "Riders only" toggle. When true:
+  //   - we pass role=rider to the list endpoint
+  //   - the action buttons switch to Approve / Reject
+  const [ridersOnly, setRidersOnly] = useState(false);
+  // "Pending only" toggle — only meaningful when ridersOnly is true.
+  // Narrows the list to isApproved=false so the admin can find them
+  // quickly without scrolling through everyone.
+  const [pendingOnly, setPendingOnly] = useState(false);
 
   // ----- Blacklist modal state -----
   // null = modal closed. Object = modal open, editing that user.
@@ -75,25 +102,28 @@ const UserManagement = () => {
   const [blacklistReason, setBlacklistReason] = useState("");
   const [blacklistSubmitting, setBlacklistSubmitting] = useState(false);
 
+  // ----- Rider action in-flight tracking -----
+  // We track the per-row id so multiple approve/reject calls can run
+  // concurrently and the spinners don't bleed into each other.
+  const [riderActionOn, setRiderActionOn] = useState<string | null>(null);
+
   // ============================================================
   // FETCH all users
   // ============================================================
-  // We reuse the user-list endpoint (it's the only public list).
-  // We could add an /api/admin/users endpoint in the future, but
-  // /user/all (or similar) might already exist — let me check.
-  // For now, we use /admin/stats + a separate fetch per user (TODO)
-  //
-  // Actually: the existing /api/auth/admin/users OR /api/admin/users
-  // is what we need. Let me use the admin endpoint we'll add: GET
-  // /api/admin/users (returns all users). If it doesn't exist yet,
-  // we'll see and add it.
+  // We reuse the user-list endpoint. It supports ?role=rider and
+  // ?isApproved=true|false as filters (added when the rider feature
+  // shipped). Re-fetches whenever the filter state changes so the
+  // server does the heavy lifting instead of the client.
   const fetchUsers = async () => {
     setLoading(true);
     try {
       // Server response shape (ApiResponse wrapper):
       //   { statusCode, data: { users, total, page, limit, totalPages }, message }
       // We need the inner `data.users` array — `data` itself is an object.
-      const res = await api.get("/admin/users");
+      const params: Record<string, string> = {};
+      if (ridersOnly) params.role = "rider";
+      if (ridersOnly && pendingOnly) params.isApproved = "false";
+      const res = await api.get("/admin/users", { params });
       const payload = res.data?.data;
       setUsers(Array.isArray(payload?.users) ? payload.users : []);
     } catch (err) {
@@ -106,7 +136,9 @@ const UserManagement = () => {
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+    // Re-fetch when the filter state changes. fetchUsers is stable
+    // (declared inline) so we depend on the filter values directly.
+  }, [ridersOnly, pendingOnly]);
 
   // ============================================================
   // HANDLERS
@@ -181,13 +213,59 @@ const UserManagement = () => {
   };
 
   // ============================================================
+  // RIDER APPROVE / REJECT
+  // ============================================================
+  // Both endpoints are idempotent on the server (a no-op if the
+  // rider is already in the target state). The UI updates the row
+  // optimistically to make the change feel instant — the server is
+  // the source of truth and any failure rolls back via toast.
+
+  const handleApproveRider = async (user: AdminUser) => {
+    setRiderActionOn(user._id);
+    try {
+      await api.post(`/admin/riders/${user._id}/approve`);
+      setUsers((prev) =>
+        prev.map((u) => (u._id === user._id ? { ...u, isApproved: true } : u))
+      );
+      toast.success(`${user.fullname} approved as a rider`);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setRiderActionOn(null);
+    }
+  };
+
+  const handleRejectRider = async (user: AdminUser) => {
+    // Reject = take away approval. Confirm because this blocks them
+    // from logging in if they currently have access.
+    const ok = window.confirm(
+      `Revoke ${user.fullname}'s rider approval?\n\nThey will be unable to log in until you re-approve them.`
+    );
+    if (!ok) return;
+    setRiderActionOn(user._id);
+    try {
+      await api.post(`/admin/riders/${user._id}/reject`);
+      setUsers((prev) =>
+        prev.map((u) => (u._id === user._id ? { ...u, isApproved: false } : u))
+      );
+      toast.success(`${user.fullname}'s rider access has been revoked`);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setRiderActionOn(null);
+    }
+  };
+
+  // ============================================================
   // DERIVED
   // ============================================================
   // Apply the search + tab filter
   const filteredUsers = users.filter((u) => {
-    // Tab filter
+    // Status tab filter
     if (filterTab === "active" && u.isBlacklisted) return false;
     if (filterTab === "blacklisted" && !u.isBlacklisted) return false;
+    // Riders-only tab also gates on isApproved (when "Pending only" is on)
+    if (ridersOnly && pendingOnly && u.isApproved !== false) return false;
     // Search filter (case-insensitive, matches name OR email)
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -198,10 +276,15 @@ const UserManagement = () => {
     return true;
   });
 
-  // Counts for the tab badges
+  // Counts for the tab badges.
+  // When ridersOnly is on, the counts are over the (server-filtered)
+  // rider list, not the full user list — so the "Blacklisted" badge
+  // shows the number of blacklisted riders, etc. This is intentional:
+  // it tells the admin "of the riders, how many are in each state".
   const totalCount = users.length;
   const blacklistedCount = users.filter((u) => u.isBlacklisted).length;
   const activeCount = totalCount - blacklistedCount;
+  const pendingCount = users.filter((u) => u.role === "rider" && !u.isApproved).length;
 
   // ============================================================
   // RENDER
@@ -209,63 +292,116 @@ const UserManagement = () => {
   return (
     <div className="space-y-6">
       <PageHeader
-        icon={<UserIcon className="w-6 h-6" />}
-        title="User Management"
-        subtitle="View all users, suspend bad actors, restore access"
+        icon={ridersOnly ? <Bike className="w-6 h-6" /> : <UserIcon className="w-6 h-6" />}
+        title={ridersOnly ? "Rider Management" : "User Management"}
+        subtitle={
+          ridersOnly
+            ? "Approve new rider signups, revoke access when needed"
+            : "View all users, suspend bad actors, restore access"
+        }
       />
 
       {/* ----- Filter bar (tabs + search + refresh) ----- */}
       <Card>
         <CardContent className="p-4">
-          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-            {/* Tabs (All / Active / Blacklisted) */}
-            <div className="flex gap-1 bg-gray-100 dark:bg-neutral-800 p-1 rounded-lg">
-              {(["all", "active", "blacklisted"] as const).map((tab) => {
-                const isActive = filterTab === tab;
-                const count =
-                  tab === "all"
-                    ? totalCount
-                    : tab === "active"
-                    ? activeCount
-                    : blacklistedCount;
-                return (
-                  <button
-                    key={tab}
-                    onClick={() => setFilterTab(tab)}
-                    className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                      isActive
-                        ? "bg-white dark:bg-neutral-700 text-gray-900 dark:text-white shadow-sm"
-                        : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
-                    }`}
-                  >
-                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
-                    <span className="ml-1.5 text-xs opacity-70">({count})</span>
-                  </button>
-                );
-              })}
+          <div className="flex flex-col gap-3">
+            {/* Row 1: status tabs + riders toggle + search + refresh */}
+            <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+              {/* Status tabs (All / Active / Blacklisted) */}
+              <div className="flex gap-1 bg-gray-100 dark:bg-neutral-800 p-1 rounded-lg">
+                {(["all", "active", "blacklisted"] as const).map((tab) => {
+                  const isActive = filterTab === tab;
+                  const count =
+                    tab === "all"
+                      ? totalCount
+                      : tab === "active"
+                      ? activeCount
+                      : blacklistedCount;
+                  return (
+                    <button
+                      key={tab}
+                      onClick={() => setFilterTab(tab)}
+                      className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                        isActive
+                          ? "bg-white dark:bg-neutral-700 text-gray-900 dark:text-white shadow-sm"
+                          : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                      }`}
+                    >
+                      {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                      <span className="ml-1.5 text-xs opacity-70">({count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Riders-only toggle. When on, also shows a Pending sub-tab. */}
+              <button
+                onClick={() => {
+                  setRidersOnly((v) => !v);
+                  setPendingOnly(false); // reset nested state when toggling
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border transition-colors ${
+                  ridersOnly
+                    ? "bg-orange text-white border-orange"
+                    : "bg-white dark:bg-neutral-900 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-neutral-700 hover:bg-gray-50 dark:hover:bg-neutral-800"
+                }`}
+                title="Show only riders (and pending approval)"
+              >
+                <Bike className="w-4 h-4" />
+                Riders only
+              </button>
+
+              {/* Search */}
+              <div className="relative flex-1">
+                <Input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={
+                    ridersOnly ? "Search riders by name or email..." : "Search by name or email..."
+                  }
+                  className="pl-9"
+                />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              </div>
+
+              {/* Refresh */}
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={fetchUsers}
+                disabled={loading}
+                aria-label="Refresh users"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+              </Button>
             </div>
 
-            {/* Search */}
-            <div className="relative flex-1">
-              <Input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by name or email..."
-                className="pl-9"
-              />
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            </div>
-
-            {/* Refresh */}
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={fetchUsers}
-              disabled={loading}
-              aria-label="Refresh users"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-            </Button>
+            {/* Row 2: nested "Pending only" sub-toggle (only visible when ridersOnly) */}
+            {ridersOnly && (
+              <div className="flex items-center gap-2 pl-1">
+                <button
+                  onClick={() => setPendingOnly((v) => !v)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors ${
+                    pendingOnly
+                      ? "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-800"
+                      : "bg-white dark:bg-neutral-900 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-neutral-700 hover:bg-gray-50 dark:hover:bg-neutral-800"
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  Pending only
+                  {pendingCount > 0 && (
+                    <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-200 text-amber-900 text-[10px] font-bold">
+                      {pendingCount}
+                    </span>
+                  )}
+                </button>
+                {pendingOnly && (
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    Showing {filteredUsers.length} of {totalCount} riders awaiting approval
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -288,8 +424,25 @@ const UserManagement = () => {
             </div>
           ) : filteredUsers.length === 0 ? (
             <div className="p-12 text-center text-gray-500">
-              <UserIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
-              <p>No users found.</p>
+              {ridersOnly ? (
+                <>
+                  <Bike className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p className="font-medium">
+                    {pendingOnly
+                      ? "No pending riders — everyone's been approved."
+                      : "No riders yet."}
+                  </p>
+                  <p className="text-xs mt-1 opacity-70">
+                    Riders sign up via the regular signup form with role=rider.
+                    They appear here for approval.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <UserIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p>No users found.</p>
+                </>
+              )}
             </div>
           ) : (
             <div className="divide-y divide-gray-100 dark:divide-neutral-800">
@@ -299,6 +452,13 @@ const UserManagement = () => {
                   user={user}
                   onBlacklist={() => openBlacklistModal(user)}
                   onUnblacklist={() => handleUnblacklist(user)}
+                  // Rider actions only meaningful in riders-only mode,
+                  // but passing them unconditionally keeps the row
+                  // component simple.
+                  onApproveRider={() => handleApproveRider(user)}
+                  onRejectRider={() => handleRejectRider(user)}
+                  riderActionPending={riderActionOn === user._id}
+                  showRiderActions={ridersOnly}
                 />
               ))}
             </div>
@@ -329,16 +489,26 @@ export default UserManagement;
 
 /**
  * One row in the users list. Shows user info + the Blacklist or
- * Unblacklist button depending on current status.
+ * Unblacklist button depending on current status. When the parent
+ * passes `showRiderActions`, the row instead shows Approve / Reject
+ * buttons (for the riders-only tab).
  */
 const UserRow = ({
   user,
   onBlacklist,
   onUnblacklist,
+  onApproveRider,
+  onRejectRider,
+  riderActionPending,
+  showRiderActions,
 }: {
   user: AdminUser;
   onBlacklist: () => void;
   onUnblacklist: () => void;
+  onApproveRider: () => void;
+  onRejectRider: () => void;
+  riderActionPending: boolean;
+  showRiderActions: boolean;
 }) => {
   // Initials for the avatar circle
   const initials = (user.fullname || user.email).substring(0, 2).toUpperCase();
@@ -349,6 +519,8 @@ const UserRow = ({
       ? "bg-purple-100 text-purple-700"
       : user.role === "restaurant_owner"
       ? "bg-blue-100 text-blue-700"
+      : user.role === "rider"
+      ? "bg-orange-100 text-orange-700"
       : "bg-gray-200 text-gray-700";
 
   return (
@@ -357,7 +529,11 @@ const UserRow = ({
       <div
         className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${avatarColor}`}
       >
-        {initials}
+        {user.role === "rider" ? (
+          <Bike className="w-5 h-5" />
+        ) : (
+          initials
+        )}
       </div>
 
       {/* User info */}
@@ -373,6 +549,13 @@ const UserRow = ({
               Blacklisted
             </span>
           )}
+          {/* Rider pending-approval badge (only meaningful on riders) */}
+          {user.role === "rider" && user.isApproved === false && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+              <Clock className="w-3 h-3" />
+              Pending approval
+            </span>
+          )}
           {/* Role badge */}
           <span
             className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -380,6 +563,8 @@ const UserRow = ({
                 ? "bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-300"
                 : user.role === "restaurant_owner"
                 ? "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300"
+                : user.role === "rider"
+                ? "bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300"
                 : "bg-gray-100 text-gray-600 dark:bg-neutral-800 dark:text-gray-300"
             }`}
           >
@@ -391,6 +576,12 @@ const UserRow = ({
             <Mail className="w-3 h-3" />
             {user.email}
           </span>
+          {user.contact && (
+            <span className="flex items-center gap-1">
+              <span>📞</span>
+              {user.contact}
+            </span>
+          )}
           <span className="flex items-center gap-1">
             <Calendar className="w-3 h-3" />
             Joined {new Date(user.createdAt).toLocaleDateString()}
@@ -406,9 +597,47 @@ const UserRow = ({
         </div>
       </div>
 
-      {/* Action button */}
-      <div className="flex-shrink-0">
-        {user.isBlacklisted ? (
+      {/* Action buttons */}
+      <div className="flex-shrink-0 flex items-center gap-2">
+        {showRiderActions ? (
+          // ----- Rider mode: Approve / Reject -----
+          user.isApproved === false ? (
+            <Button
+              onClick={onApproveRider}
+              disabled={riderActionPending}
+              size="sm"
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              {riderActionPending ? (
+                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 mr-1" />
+              )}
+              Approve
+            </Button>
+          ) : (
+            <Button
+              onClick={onRejectRider}
+              disabled={riderActionPending || user.isBlacklisted}
+              variant="outline"
+              size="sm"
+              className="text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300"
+              title={
+                user.isBlacklisted
+                  ? "Unblacklist this rider first before revoking approval"
+                  : "Revoke rider approval"
+              }
+            >
+              {riderActionPending ? (
+                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+              ) : (
+                <XCircle className="w-4 h-4 mr-1" />
+              )}
+              Reject
+            </Button>
+          )
+        ) : // ----- Normal user mode: Blacklist / Unblacklist -----
+        user.isBlacklisted ? (
           <Button
             onClick={onUnblacklist}
             variant="outline"

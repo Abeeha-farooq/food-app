@@ -62,6 +62,29 @@ const orderSchema = new mongoose.Schema(
       default: "placed",
     },
 
+    // ----- Delivery rider assignment (admin-only operation) -----
+    // When an admin assigns a rider, we store who it is + when + which
+    // admin did it (audit trail). Customer queries (getMyOrders,
+    // getOrderById) populate this with fullname + contact so the
+    // customer can see "their" rider immediately upon assignment.
+    //
+    // null = no rider assigned yet. The order can still progress
+    // through statuses without a rider; assignment is independent.
+    rider: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    riderAssignedAt: {
+      type: Date,
+      default: null,
+    },
+    riderAssignedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     // Payment status — separate from order status because they update independently.
     // Example: an order can be "delivered" with payment still "pending" (cash on delivery),
     // or "out_for_delivery" with payment "paid" (online).
@@ -91,6 +114,30 @@ const orderSchema = new mongoose.Schema(
       maxlength: 1000,
     },
     reviewedAt: {
+      type: Date,
+      default: null,
+    },
+
+    // ----- Rider review (only set after the order is delivered) -----
+    // Same one-shot pattern as the food review above, but for the
+    // delivery rider. The customer can rate the rider independently
+    // of the food (e.g. they loved the food but the rider was late).
+    //
+    // Only set if the order had a rider assigned at the time of
+    // delivery — if `rider` is null, these stay null. The submitReview
+    // endpoint enforces this rule.
+    riderRating: {
+      type: Number,
+      min: 1,
+      max: 5,
+      default: null,
+    },
+    riderReviewComment: {
+      type: String,
+      default: "",
+      maxlength: 1000,
+    },
+    riderReviewedAt: {
       type: Date,
       default: null,
     },

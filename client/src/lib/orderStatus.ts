@@ -62,13 +62,37 @@ export interface Order {
   deliveryAddress: string;
   status: OrderStatus;
   paymentStatus: PaymentStatus;
+  // ----- Rider (assigned by admin) -----
+  // Populated by the backend in all GET endpoints with fullname +
+  // contact (phone). `null` when no rider is assigned yet.
+  // The customer sees this immediately on assignment (per the spec).
+  rider?: { _id: string; fullname: string; contact: string } | null;
   // ----- Review fields (set after the customer rates a delivered order) -----
   // All optional — undefined for orders that haven't been reviewed yet.
   rating?: number;          // 1-5
   reviewComment?: string;   // optional text
   reviewedAt?: string;      // ISO date
+  // ----- Rider review (independent of food review) -----
+  // Same one-shot pattern. Set when the customer rates the delivery
+  // rider; only present if the order had a rider assigned.
+  riderRating?: number;          // 1-5
+  riderReviewComment?: string;   // optional text
+  riderReviewedAt?: string;      // ISO date
   createdAt: string;
   updatedAt: string;
+}
+
+// A single rider row in the "assign rider" dropdown. Returned by
+// GET /api/admin/riders/available, sorted by activeDeliveries asc
+// (the first item is the auto-suggestion).
+export interface AvailableRider {
+  _id: string;
+  fullname: string;
+  email: string;
+  contact?: string;
+  isApproved: boolean;
+  activeDeliveries: number;
+  createdAt: string;
 }
 
 // ============================================================

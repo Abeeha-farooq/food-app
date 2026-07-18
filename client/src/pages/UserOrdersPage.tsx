@@ -33,7 +33,7 @@ import {
   OrderStatusBadge,
   PaymentStatusBadge,
 } from "@/components/ui/status-badge";
-import { ReviewModal, type ReviewableOrder } from "@/components/ReviewModal";
+import { ReviewModal } from "@/components/ReviewModal";
 import api, { getErrorMessage } from "@/lib/api";
 import { type Order } from "@/lib/orderStatus";
 import { toast } from "sonner";
@@ -45,6 +45,9 @@ import {
   Calendar,
   ChevronDown,
   ChevronUp,
+  Bike,
+  Phone,
+  Star,
 } from "lucide-react";
 
 // How many items to show in the collapsed view before adding "+N more".
@@ -89,13 +92,19 @@ const UserOrdersPage = () => {
       const fetched: Order[] = res.data.data;
       setOrders(fetched);
 
-      // Build the pending-review queue. We only count orders that:
-      //   - Have status === "delivered"
-      //   - Don't have a rating yet (rating is null/undefined/0)
+      // Build the pending-review queue. An order is "needs review" if
+      // it's delivered AND any of these is true:
+      //   - No food rating yet
+      //   - Has a rider but no rider rating yet
       // Sorted oldest-first so the user reviews the longest-waiting order
       // (better UX than reviewing the most recent one each time).
       const pending = fetched
-        .filter((o) => o.status === "delivered" && !o.rating)
+        .filter((o) => {
+          if (o.status !== "delivered") return false;
+          if (!o.rating) return true;                       // food review missing
+          if (o.rider && !o.riderRating) return true;        // rider review missing
+          return false;
+        })
         .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
         .map((o) => o._id);
       setPendingReviewIds(pending);
@@ -113,15 +122,42 @@ const UserOrdersPage = () => {
   }, []);
 
   // ----- Submit a review -----
-  const handleSubmitReview = async (rating: number, comment: string) => {
+  // Receives a partial payload — the modal tells us which fields were
+  // actually set. We forward to the server; the server is idempotent
+  // for "already rated" fields (it'll throw 400 if a client bug
+  // double-submits, but normal usage never hits that).
+  const handleSubmitReview = async (payload: {
+    foodRating: number | null;
+    foodComment: string;
+    riderRating: number | null;
+    riderComment: string;
+  }) => {
     if (!currentReviewOrder) return;
     try {
-      await api.patch(`/orders/${currentReviewOrder._id}/review`, {
-        rating,
-        comment,
-      });
-      toast.success("Thanks for your review!");
-      // Refresh the orders list so the new rating shows on the card
+      // Build the request body with only the fields the user actually set.
+      // Sending undefined would force the server to re-validate them
+      // (and the existing-rating guard would fire); explicit nulls
+      // skip the field entirely on the server.
+      const body: Record<string, unknown> = {};
+      if (payload.foodRating !== null) {
+        body.rating = payload.foodRating;
+        body.comment = payload.foodComment;
+      }
+      if (payload.riderRating !== null) {
+        body.riderRating = payload.riderRating;
+        body.riderReviewComment = payload.riderComment;
+      }
+      await api.patch(`/orders/${currentReviewOrder._id}/review`, body);
+      // Tailor the toast to what was actually submitted.
+      const parts: string[] = [];
+      if (payload.foodRating !== null) parts.push("food");
+      if (payload.riderRating !== null) parts.push("rider");
+      toast.success(
+        parts.length === 0
+          ? "Thanks!"
+          : `Thanks for rating the ${parts.join(" and ")}!`
+      );
+      // Refresh the orders list so the new ratings show on the card
       await fetchMyOrders();
     } catch (err) {
       toast.error(getErrorMessage(err) || "Failed to submit review");
@@ -135,6 +171,16 @@ const UserOrdersPage = () => {
   // If the user wants to be re-prompted, they can refresh the page.
   const handleSkipReview = () => {
     setUserDismissedReviews(true);
+  };
+
+  // ----- Open the review modal "on demand" -----
+  // Triggered by clicking the "Rate your rider" button on an order
+  // card. The flow is the same as the auto-popup; we just trigger
+  // it manually. We also flip the dismissed flag off so the modal
+  // can show.
+  const openReviewForOrder = (orderId: string) => {
+    setUserDismissedReviews(false);
+    setPendingReviewIds([orderId]);
   };
 
   // ----- Expand/collapse a card to show all items -----
@@ -254,6 +300,11 @@ const UserOrdersPage = () => {
             order={order}
             isExpanded={expandedIds.has(order._id)}
             onToggle={() => toggleExpanded(order._id)}
+            onRateRider={
+              order.status === "delivered" && order.rider && !order.riderRating
+                ? () => openReviewForOrder(order._id)
+                : undefined
+            }
           />
         ))}
       </div>
@@ -262,7 +313,23 @@ const UserOrdersPage = () => {
           delivered order that hasn't been reviewed AND the user hasn't
           dismissed the prompts this session. */}
       <ReviewModal
-        order={currentReviewOrder as ReviewableOrder | null}
+        order={
+          currentReviewOrder
+            ? {
+                _id: currentReviewOrder._id,
+                restaurant: currentReviewOrder.restaurant,
+                items: currentReviewOrder.items,
+                totalPrice: currentReviewOrder.totalPrice,
+                // Pass the rider + existing ratings so the modal can
+                // render the rider section + the "you already rated"
+                // chips. The modal needs the actual user to know if
+                // a rider-rating section should appear.
+                rider: currentReviewOrder.rider ?? null,
+                existingFoodRating: currentReviewOrder.rating ?? null,
+                existingRiderRating: currentReviewOrder.riderRating ?? null,
+              }
+            : null
+        }
         open={!!currentReviewOrder}
         onSubmit={handleSubmitReview}
         onSkip={handleSkipReview}
@@ -285,9 +352,12 @@ interface OrderCardProps {
   order: Order;
   isExpanded: boolean;
   onToggle: () => void;
+  // Called when the user clicks "Rate your rider" on the card.
+  // The parent opens the ReviewModal in "rider rating" mode for this order.
+  onRateRider?: () => void;
 }
 
-const OrderCard = ({ order, isExpanded, onToggle }: OrderCardProps) => {
+const OrderCard = ({ order, isExpanded, onToggle, onRateRider }: OrderCardProps) => {
   // Total quantity of items, e.g. "3 items"
   const totalQty = order.items.reduce((sum, i) => sum + i.quantity, 0);
   // How many items to show in collapsed mode
@@ -346,6 +416,59 @@ const OrderCard = ({ order, isExpanded, onToggle }: OrderCardProps) => {
               </p>
             )}
           </div>
+        )}
+
+        {/* ----- Your rider card -----
+            Shown whenever an admin has assigned a rider to this order
+            (per the spec: visibility = "as soon as assigned"). The
+            phone is a `tel:` link so the customer can tap to call
+            directly on mobile. The whole card uses a distinctive
+            blue tone so it stands out from the order info. */}
+        {order.rider && (
+          <div className="bg-blue-50 border border-blue-100 rounded-md p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <Bike className="w-4 h-4 text-blue-700" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-blue-800">Your rider</p>
+                <p className="font-semibold text-gray-900 truncate">
+                  {order.rider.fullname}
+                </p>
+              </div>
+              {/* If the customer already rated the rider, show the
+                  stars next to the name as a subtle reminder. */}
+              {order.riderRating ? (
+                <StarRating value={order.riderRating} size="sm" />
+              ) : null}
+            </div>
+            {order.rider.contact && (
+              <a
+                href={`tel:${order.rider.contact.replace(/\s+/g, "")}`}
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline transition-colors"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                {order.rider.contact}
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* ----- "Rate your rider" CTA -----
+            Shown only when the order is delivered + has a rider + the
+            rider hasn't been rated yet. This is the "come back later"
+            entry point — the auto-popup only fires for orders with no
+            food review, so this button lets the customer rate the
+            rider retroactively after the food prompt is gone. */}
+        {order.status === "delivered" && order.rider && !order.riderRating && onRateRider && (
+          <button
+            type="button"
+            onClick={onRateRider}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md transition-colors"
+          >
+            <Star className="w-4 h-4 fill-current" />
+            Rate your rider
+          </button>
         )}
 
         {/* ----- Items list (collapsed / expanded) ----- */}

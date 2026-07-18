@@ -25,7 +25,7 @@ import {
   OrderStatusBadge,
   PaymentStatusBadge,
 } from "@/components/ui/status-badge";
-import { Loader2, Search, X, ChevronRight, Calendar, User, Store, MapPin, DollarSign, ShoppingBag, Clock, CheckCircle2, Truck, Inbox } from "lucide-react";
+import { Loader2, Search, X, ChevronRight, Calendar, User, Store, MapPin, DollarSign, ShoppingBag, Clock, CheckCircle2, Truck, Inbox, Bike, Phone, Star, UserPlus, UserMinus } from "lucide-react";
 import { toast } from "sonner";
 import api, { getErrorMessage } from "@/lib/api";
 import { useAuth } from "@/context/useAuth";
@@ -38,6 +38,7 @@ import {
   type OrderStatus,
   type PaymentStatus,
   type Order,
+  type AvailableRider,
 } from "@/lib/orderStatus";
 
 // ============================================================
@@ -142,6 +143,32 @@ const OrdersPage = () => {
       toast.error(getErrorMessage(err));
     } finally {
       setUpdatingOrderId(null);
+    }
+  };
+
+  // ============================================================
+  // RIDER ASSIGNMENT (admin only)
+  // ============================================================
+  // The OrderDetailModal fetches its own list of available riders
+  // (lazy — only when opened) so we don't hit /api/admin/riders/available
+  // on every page load. The modal handles the actual PATCH /api/orders/:id/rider
+  // call too; this page just refreshes the local state when it succeeds.
+
+  // Called by the modal after a successful assign/reassign/unassign.
+  // Pulls the updated order (with rider populated) from the server
+  // and merges it into both the list and the currently-open modal.
+  const refreshOrder = async (orderId: string) => {
+    try {
+      const res = await api.get(`/orders/${orderId}`);
+      const fresh = res.data.data;
+      setOrders((prev) => prev.map((o) => (o._id === orderId ? fresh : o)));
+      if (selectedOrder?._id === orderId) {
+        setSelectedOrder(fresh);
+      }
+    } catch (err) {
+      // Non-fatal — the order is still updated server-side, we just
+      // couldn't pull the fresh copy. A toast lets the admin know.
+      toast.error("Couldn't refresh order — please reload");
     }
   };
 
@@ -414,6 +441,7 @@ const OrdersPage = () => {
           onUpdatePaymentStatus={updatePaymentStatus}
           updating={updatingOrderId === selectedOrder?._id}
           canEdit={isAdmin}
+          onRiderChanged={() => refreshOrder(selectedOrder._id)}
         />
       )}
     </div>
@@ -452,7 +480,7 @@ const StatCard = ({
 
 // Detail modal — shows full order info + status/payment update controls (admin only)
 const OrderDetailModal = ({
-  order, onClose, onUpdateStatus, onUpdatePaymentStatus, updating, canEdit,
+  order, onClose, onUpdateStatus, onUpdatePaymentStatus, updating, canEdit, onRiderChanged,
 }: {
   order: Order;
   onClose: () => void;
@@ -460,7 +488,22 @@ const OrderDetailModal = ({
   onUpdatePaymentStatus: (id: string, paymentStatus: PaymentStatus) => void;
   updating: boolean;
   canEdit: boolean;   // true only for admin
+  onRiderChanged: () => void;
 }) => {
+  // ----- Rider assignment modal state -----
+  // null = closed; object = open for that order
+  const [riderModal, setRiderModal] = useState<{
+    mode: "assign" | "reassign";
+  } | null>(null);
+  // The unassign action tracks its own spinner (we don't reuse
+  // `updating` because that flag is also driven by status changes).
+  const [unassigning, setUnassigning] = useState(false);
+
+  // Terminal states where reassignment is forbidden by the backend.
+  // The user-facing buttons also check this, but we hide the entire
+  // rider section for these to keep the modal clean.
+  const isTerminal = order.status === "delivered" || order.status === "cancelled";
+
   return (
     <div
       // Fixed overlay covers the whole screen with a semi-transparent backdrop
@@ -555,6 +598,71 @@ const OrderDetailModal = ({
             </InfoRow>
           )}
 
+          {/* Rider info — admin-only. Hidden for terminal statuses. */}
+          {canEdit && !isTerminal && (
+            <InfoRow icon={<Bike className="w-4 h-4" />} label="Rider">
+              {order.rider ? (
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                  <div className="flex-1">
+                    <div className="font-medium">{order.rider.fullname}</div>
+                    <div className="text-sm text-gray-500 flex items-center gap-1">
+                      <Phone className="w-3 h-3" />
+                      {order.rider.contact}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={unassigning}
+                      onClick={async () => {
+                        setUnassigning(true);
+                        try {
+                          await api.patch(`/orders/${order._id}/rider`, { riderId: null });
+                          toast.success("Rider unassigned");
+                          onRiderChanged();
+                        } catch (err) {
+                          toast.error(getErrorMessage(err));
+                        } finally {
+                          setUnassigning(false);
+                        }
+                      }}
+                    >
+                      {unassigning ? (
+                        <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                      ) : (
+                        <UserMinus className="w-4 h-4 mr-1" />
+                      )}
+                      Unassign
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setRiderModal({ mode: "reassign" })}
+                    >
+                      Reassign
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-500 italic">No rider assigned yet</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setRiderModal({ mode: "assign" })}
+                    className="ml-auto"
+                  >
+                    <UserPlus className="w-4 h-4 mr-1" />
+                    Assign rider
+                  </Button>
+                </div>
+              )}
+            </InfoRow>
+          )}
+
           {/* Restaurant info */}
           <InfoRow icon={<Store className="w-4 h-4" />} label="Restaurant">
             <div className="font-medium">{order.restaurant.name}</div>
@@ -616,6 +724,17 @@ const OrderDetailModal = ({
           <Button variant="outline" onClick={onClose}>Close</Button>
         </div>
       </div>
+
+      {/* ----- Rider assign/reassign modal ----- */}
+      {/* Stacked on top of the order detail modal (z-60 vs z-50) so
+          the admin can layer them naturally. */}
+      {riderModal && (
+        <RiderAssignModal
+          orderId={order._id}
+          onClose={() => setRiderModal(null)}
+          onAssigned={onRiderChanged}
+        />
+      )}
     </div>
   );
 };
@@ -632,3 +751,211 @@ const InfoRow = ({
     <div className="flex-1">{children}</div>
   </div>
 );
+
+// ============================================================
+// RIDER ASSIGN / REASSIGN MODAL
+// ============================================================
+// Opens from the OrderDetailModal. Fetches the available riders
+// (approved, non-blacklisted) ONCE on open, sorts by active
+// deliveries, and pre-selects the suggestion (the first item) so
+// the admin can usually just hit "Assign" without thinking.
+//
+// If no riders are available, the modal shows an empty state with
+// a link to the User Management page so the admin knows where to
+// go to approve pending riders.
+const RiderAssignModal = ({
+  orderId,
+  onClose,
+  onAssigned,
+}: {
+  orderId: string;
+  onClose: () => void;
+  onAssigned: () => void;
+}) => {
+  // ----- State -----
+  const [riders, setRiders] = useState<AvailableRider[]>([]);
+  const [suggestedId, setSuggestedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  // ----- Fetch available riders on mount -----
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await api.get("/admin/riders/available");
+        // Shape: { data: { riders: [...], suggestedId } }
+        const payload = res.data?.data;
+        setRiders(Array.isArray(payload?.riders) ? payload.riders : []);
+        setSuggestedId(payload?.suggestedId ?? null);
+        // Pre-select the suggestion (so admin can just click "Assign").
+        setSelectedId(payload?.suggestedId ?? null);
+      } catch (err) {
+        toast.error(getErrorMessage(err));
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, []);
+
+  // ----- Submit -----
+  const submit = async () => {
+    if (!selectedId) return;
+    setSubmitting(true);
+    try {
+      const res = await api.patch(`/orders/${orderId}/rider`, { riderId: selectedId });
+      // The server returns the full updated order with rider populated.
+      const assigned = res.data?.data?.rider;
+      toast.success(
+        assigned
+          ? `Assigned to ${assigned.fullname}`
+          : "Rider assigned"
+      );
+      onAssigned();
+      onClose();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 bg-black bg-opacity-50 z-[60] flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-lg shadow-xl w-full max-w-md p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
+            <Bike className="w-5 h-5 text-orange-600" />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-lg font-bold">Assign a rider</h2>
+            <p className="text-sm text-gray-500">
+              The customer will see the rider's name + phone immediately.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-50"
+            aria-label="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        {loading ? (
+          <div className="py-8 text-center text-sm text-gray-500">
+            <Loader2 className="w-6 h-6 mx-auto mb-2 animate-spin" />
+            Loading available riders...
+          </div>
+        ) : riders.length === 0 ? (
+          // Empty state — no approved riders yet
+          <div className="py-8 text-center">
+            <Bike className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+            <p className="text-sm font-medium text-gray-700">No riders available</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Approve pending riders in the User Management page (Riders tab),
+              then come back here.
+            </p>
+          </div>
+        ) : (
+          // Rider list
+          <div className="space-y-1 max-h-80 overflow-y-auto">
+            {riders.map((r) => {
+              const isSelected = r._id === selectedId;
+              const isSuggested = r._id === suggestedId;
+              return (
+                <button
+                  key={r._id}
+                  type="button"
+                  onClick={() => setSelectedId(r._id)}
+                  className={`w-full text-left flex items-center gap-3 p-3 rounded-md border transition-colors ${
+                    isSelected
+                      ? "border-orange bg-orange-50"
+                      : "border-gray-200 hover:bg-gray-50"
+                  }`}
+                >
+                  {/* Radio dot */}
+                  <div
+                    className={`w-4 h-4 rounded-full border-2 flex-shrink-0 ${
+                      isSelected
+                        ? "border-orange bg-orange"
+                        : "border-gray-300"
+                    }`}
+                  >
+                    {isSelected && (
+                      <div className="w-full h-full rounded-full bg-white scale-50" />
+                    )}
+                  </div>
+                  {/* Rider info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium truncate">{r.fullname}</span>
+                      {isSuggested && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-100 text-yellow-800 border border-yellow-300">
+                          <Star className="w-2.5 h-2.5" />
+                          SUGGESTED
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-500 flex items-center gap-2">
+                      <span className="flex items-center gap-1">
+                        <Phone className="w-3 h-3" />
+                        {r.contact || "—"}
+                      </span>
+                      <span>·</span>
+                      <span>
+                        {r.activeDeliveries === 0
+                          ? "Available now"
+                          : `${r.activeDeliveries} active delivery${r.activeDeliveries === 1 ? "" : "s"}`}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-2 justify-end pt-4 mt-4 border-t">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={submit}
+            disabled={!selectedId || submitting}
+            className="bg-orange hover:bg-hoverOrange text-white"
+          >
+            {submitting ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                Assigning...
+              </>
+            ) : (
+              <>
+                <UserPlus className="w-4 h-4 mr-1" />
+                Assign
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};

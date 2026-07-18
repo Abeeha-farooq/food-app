@@ -8,6 +8,7 @@ import {
   updateOrderStatus,
   updateOrderPayment,
   submitReview,
+  assignRider,
 } from "../controllers/order.controller.js";
 import { verifyJWT, requireRole } from "../middlewares/auth.middleware.js";
 
@@ -30,5 +31,10 @@ router.patch("/:id/review", submitReview);
 router.get("/", requireRole("admin"), getAllOrders);
 router.patch("/:id/status",   requireRole("admin", "restaurant_owner"), updateOrderStatus);
 router.patch("/:id/payment", requireRole("admin", "restaurant_owner"), updateOrderPayment);
+
+// Assign / unassign a rider to an order.
+// Admin-only — restaurant owners don't manage delivery staffing.
+// Body: { riderId: string | null }
+router.patch("/:id/rider", requireRole("admin"), assignRider);
 
 export default router;

@@ -44,12 +44,26 @@ import asyncHandler from "../utils/asyncHandler.js";
 // We do NOT create the User here — that only happens after the
 // user proves they own the email by entering the OTP.
 export const signup = asyncHandler(async (req, res) => {
-  const { fullname, email, contact, password } = req.body;
+  const { fullname, email, contact, password, role } = req.body;
 
   // Basic sanity checks (the zod schema in the route does the deep validation,
   // but a quick guard here gives better error messages).
   if (!fullname || !email || !contact || !password) {
     throw new ApiError(400, "All fields are required");
+  }
+
+  // ----- Role validation (sign-up) -----
+  // The signup form may POST role="rider" for delivery riders. We
+  // explicitly REJECT any attempt to register as "admin" or
+  // "restaurant_owner" — those are set only by the DB / seed.
+  // If the client omits role, it defaults to "user" (normal customer).
+  const allowedSignupRoles = ["user", "rider"];
+  const requestedRole = role || "user";
+  if (!allowedSignupRoles.includes(requestedRole)) {
+    throw new ApiError(
+      400,
+      `Invalid role. Public signup only accepts: ${allowedSignupRoles.join(", ")}`
+    );
   }
 
   // Has the user ALREADY registered and verified? If so, tell them.
@@ -72,6 +86,7 @@ export const signup = asyncHandler(async (req, res) => {
     email: email.toLowerCase(),
     contact: contact.trim(),
     password: hashedPassword,
+    role: requestedRole,
   });
 
   // Fetch the OTP we just generated so we can email it. (We could
@@ -121,12 +136,18 @@ export const verifyEmail = asyncHandler(async (req, res) => {
   // so we use `collection.insertOne()` to BYPASS the User model's
   // pre-save hash hook (otherwise it would hash the hash a second
   // time and the user couldn't log in).
+  //
+  // Role is taken from the PendingSignup record (defaults to "user";
+  // rider signup sets it to "rider"). Riders are created with
+  // isApproved=false so they're blocked from logging in until an
+  // admin approves them via the admin rider endpoints.
   const userDoc = await User.collection.insertOne({
     fullname: pending.fullname,
     email: pending.email,
     contact: pending.contact,
     password: pending.password,   // already hashed
-    role: "user",                 // default role; admins set via seed/DB
+    role: pending.role || "user",
+    isApproved: pending.role === "rider" ? false : true,
     isVerified: true,
     profilePicture: "",
     address: "",
@@ -231,6 +252,19 @@ export const login = asyncHandler(async (req, res) => {
     throw new ApiError(
       403,
       `Your account has been suspended.${reasonSuffix} Contact support if you believe this is a mistake.`
+    );
+  }
+
+  // ----- Rider approval check -----
+  // Riders sign up via the same flow as everyone else, but their
+  // account is INACTIVE until an admin approves it. We block login
+  // (with a clear message) so they can retry after approval.
+  // (For all non-rider roles, isApproved is true by default so this
+  // check is a no-op for users / admins / restaurant owners.)
+  if (user.role === "rider" && !user.isApproved) {
+    throw new ApiError(
+      403,
+      "Your rider account is pending admin approval. You'll be able to log in once it's approved."
     );
   }
 

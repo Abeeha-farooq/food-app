@@ -54,6 +54,20 @@ export const verifyJWT = asyncHandler(async (req, _res, next) => {
       );
     }
 
+    // ----- Rider approval check (mid-session) -----
+    // Same idea as the blacklist check, but for the rider approval
+    // flow. If an admin rejects a rider AFTER they've logged in
+    // (flips isApproved to false), their existing JWT would otherwise
+    // still be valid — we explicitly block here so they get kicked
+    // out the next request.
+    // For all non-rider roles isApproved is true by default → no-op.
+    if (user.role === "rider" && !user.isApproved) {
+      throw new ApiError(
+        403,
+        "Your rider account is pending admin approval. You'll be able to use the app once it's approved."
+      );
+    }
+
     req.user = user;
     next();
   } catch (err) {

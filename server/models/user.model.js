@@ -44,11 +44,24 @@ const userSchema = new mongoose.Schema(
       select: false,      // don't return password in queries by default (security)
     },
 
-    // Authorization role: regular user vs admin vs restaurant owner
+    // Authorization role: regular user vs admin vs restaurant owner vs rider
     role: {
       type: String,
-      enum: ["user", "admin", "restaurant_owner"],
+      enum: ["user", "admin", "restaurant_owner", "rider"],
       default: "user",
+    },
+
+    // ----- Rider approval (only relevant when role === "rider") -----
+    // Riders sign up via the same flow as everyone else, but their
+    // account is INACTIVE until an admin approves them. For all other
+    // roles this stays true (the default) so it doesn't affect them.
+    //
+    // The login controller rejects rider logins when this is false;
+    // the admin has separate endpoints to approve / reject a rider.
+    isApproved: {
+      type: Boolean,
+      default: true,
+      index: true,   // indexed so admin's "pending riders" filter is fast
     },
 
     // Profile extras

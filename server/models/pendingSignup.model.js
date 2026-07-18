@@ -33,6 +33,18 @@ const pendingSignupSchema = new mongoose.Schema(
     contact: { type: String, required: true, trim: true },
     password: { type: String, required: true, select: false },   // hashed
 
+    // Which role the user is signing up as.
+    //   - "user" (default)  → normal customer, active immediately on verify
+    //   - "rider"           → delivery rider, created with isApproved=false
+    //                          and blocked from login until admin approves
+    // We DON'T allow "admin" or "restaurant_owner" via signup — those
+    // are set in the DB / seed only.
+    role: {
+      type: String,
+      enum: ["user", "rider"],
+      default: "user",
+    },
+
     // OTP + expiry. We store BOTH the OTP and an explicit expiry so
     // we can quickly check `now < verifyOTPExpires` without scanning.
     verifyOTP: { type: String, select: false },

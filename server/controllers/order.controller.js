@@ -6,6 +6,7 @@
 import Order from "../models/order.model.js";
 import MenuItem from "../models/menu.model.js";
 import Restaurant from "../models/restaurant.model.js";
+import User from "../models/user.model.js";
 import { verifyPayment } from "./payment.controller.js";
 import { verifyPayPalPayment } from "./paypal.controller.js";
 import ApiError from "../utils/apiError.js";
@@ -196,7 +197,12 @@ export const placeOrder = asyncHandler(async (req, res) => {
 export const getMyOrders = asyncHandler(async (req, res) => {
   const orders = await Order.find({ user: req.user._id })
     .sort({ createdAt: -1 })
-    .populate("restaurant", "name city imageUrl");
+    .populate("restaurant", "name city imageUrl")
+    // Populate the assigned rider's name + phone so the customer can
+    // see "their" rider on each order. Only fullname + contact are
+    // pulled — no email / address / etc. (less PII on the wire).
+    // If no rider is assigned, `rider` stays null on the order doc.
+    .populate("rider", "fullname contact");
 
   return res.status(200).json(new ApiResponse(200, orders, "Your orders fetched"));
 });
@@ -205,7 +211,9 @@ export const getMyOrders = asyncHandler(async (req, res) => {
 export const getOrderById = asyncHandler(async (req, res) => {
   const order = await Order.findById(req.params.id)
     .populate("restaurant", "name city address imageUrl")
-    .populate("user", "fullname email contact");
+    .populate("user", "fullname email contact")
+    // Populate rider same as getMyOrders — name + contact only.
+    .populate("rider", "fullname contact");
 
   if (!order) throw new ApiError(404, "Order not found");
 
@@ -229,7 +237,10 @@ export const getAllOrders = asyncHandler(async (req, res) => {
   const orders = await Order.find(filter)
     .sort({ createdAt: -1 })
     .populate("user", "fullname email")
-    .populate("restaurant", "name city");
+    .populate("restaurant", "name city")
+    // Admin view populates rider too — same fields as the customer view
+    // (name + contact) so the OrdersPage table can show who's delivering.
+    .populate("rider", "fullname contact");
 
   return res.status(200).json(new ApiResponse(200, orders, "All orders fetched"));
 });
@@ -278,16 +289,19 @@ export const updateOrderPayment = asyncHandler(async (req, res) => {
 //   - Only the order's owner can review it
 //   - Order must be in "delivered" status
 //   - One review per order (cannot re-review an already-reviewed order)
+//
+// The body may include EITHER or BOTH:
+//   - { rating, comment }       → food review (backward compatible)
+//   - { riderRating, riderReviewComment } → rider review (only if order has a rider)
+//
+// We accept both at once so the customer can rate food + rider in a
+// single round-trip. Either can be omitted — only the fields the
+// client provides get saved. This lets the UI show one combined
+// "How was your order?" modal that handles both ratings.
 export const submitReview = asyncHandler(async (req, res) => {
-  const { rating, comment } = req.body;
+  const { rating, comment, riderRating, riderReviewComment } = req.body;
 
-  // Validate rating (1-5)
-  const ratingNum = Number(rating);
-  if (!Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
-    throw new ApiError(400, "Rating must be an integer between 1 and 5");
-  }
-
-  // Find the order and verify ownership + status
+  // ----- Find the order + verify ownership/status -----
   const order = await Order.findById(req.params.id);
   if (!order) throw new ApiError(404, "Order not found");
 
@@ -299,18 +313,176 @@ export const submitReview = asyncHandler(async (req, res) => {
     throw new ApiError(400, "You can only review delivered orders");
   }
 
-  if (order.rating) {
-    throw new ApiError(400, "This order has already been reviewed");
+  // Build the update object field-by-field so we only write what's
+  // actually being set in this request. This keeps the endpoint
+  // flexible — the client can submit a food-only review, a rider-only
+  // review, or both in one go.
+  const update = {};
+
+  // ----- Food review -----
+  // Only update the food review if the client actually provided a rating.
+  // We treat `rating === undefined` as "don't touch the food review"
+  // (it might already be set, or the client just wants to rate the rider).
+  if (rating !== undefined) {
+    if (order.rating) {
+      throw new ApiError(400, "This order has already been reviewed");
+    }
+    const ratingNum = Number(rating);
+    if (!Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+      throw new ApiError(400, "Rating must be an integer between 1 and 5");
+    }
+    update.rating = ratingNum;
+    update.reviewComment = typeof comment === "string" ? comment.trim().slice(0, 1000) : "";
+    update.reviewedAt = new Date();
   }
 
-  // Trim comment (or set to empty string)
-  const cleanComment = typeof comment === "string" ? comment.trim().slice(0, 1000) : "";
+  // ----- Rider review -----
+  // Only allowed if:
+  //   1. The order actually has a rider assigned (otherwise there's
+  //      no one to rate — the spec for the rider feature includes
+  //      this safeguard so we don't get orphaned ratings).
+  //   2. The client provided a riderRating in the body
+  //   3. The rider rating hasn't been set yet (one-shot pattern)
+  if (riderRating !== undefined) {
+    if (!order.rider) {
+      throw new ApiError(
+        400,
+        "This order has no rider assigned — there's no one to rate"
+      );
+    }
+    if (order.riderRating) {
+      throw new ApiError(400, "The rider for this order has already been rated");
+    }
+    const riderRatingNum = Number(riderRating);
+    if (!Number.isInteger(riderRatingNum) || riderRatingNum < 1 || riderRatingNum > 5) {
+      throw new ApiError(400, "Rider rating must be an integer between 1 and 5");
+    }
+    update.riderRating = riderRatingNum;
+    update.riderReviewComment = typeof riderReviewComment === "string"
+      ? riderReviewComment.trim().slice(0, 1000)
+      : "";
+    update.riderReviewedAt = new Date();
+  }
+
+  // If neither field was provided, there's nothing to do — but instead
+  // of silently succeeding (which would hide a client bug), throw a
+  // 400. The endpoint should always be called with at least one rating.
+  if (Object.keys(update).length === 0) {
+    throw new ApiError(
+      400,
+      "Provide at least one of: rating (food) or riderRating"
+    );
+  }
 
   const updated = await Order.findByIdAndUpdate(
     req.params.id,
-    { rating: ratingNum, reviewComment: cleanComment, reviewedAt: new Date() },
+    update,
     { new: true }
   );
 
   return res.status(200).json(new ApiResponse(200, updated, "Review submitted"));
+});
+
+// ============================================================
+// ASSIGN RIDER TO ORDER
+// ============================================================
+// PATCH /api/orders/:id/rider
+//
+// Body: { riderId: string | null }
+//   - riderId = some User._id  → assign that rider to the order
+//   - riderId = null           → unassign the current rider
+//
+// Admin-only (mounted under requireRole("admin") in order.route.js).
+//
+// Validation rules for assignment:
+//   1. Order must exist
+//   2. Order must NOT be "delivered" or "cancelled" — no point
+//      reassigning a finished order
+//   3. The target user must exist, have role="rider", be approved,
+//      and not be blacklisted
+//
+// On assignment we record riderAssignedAt + riderAssignedBy for audit.
+// On unassignment we clear all three rider fields.
+export const assignRider = asyncHandler(async (req, res) => {
+  const { riderId } = req.body;
+  const { id } = req.params;
+
+  // ----- 1. Find the order -----
+  const order = await Order.findById(id);
+  if (!order) {
+    throw new ApiError(404, "Order not found");
+  }
+
+  // ----- 2. Order status sanity check -----
+  // We block assignment for terminal states — once delivered or
+  // cancelled, the order is done. Re-assigning is meaningless and
+  // could overwrite the audit trail.
+  const terminal = ["delivered", "cancelled"];
+  if (terminal.includes(order.status)) {
+    throw new ApiError(
+      400,
+      `Cannot (re)assign a rider for an order with status "${order.status}"`
+    );
+  }
+
+  // ----- 3a. UNASSIGN path -----
+  // riderId explicitly null → clear the rider fields.
+  if (riderId === null) {
+    // Idempotent: if no rider was assigned, return success without writing.
+    if (order.rider === null) {
+      return res
+        .status(200)
+        .json(new ApiResponse(200, order, "No rider was assigned"));
+    }
+    order.rider = null;
+    order.riderAssignedAt = null;
+    order.riderAssignedBy = null;
+    await order.save();
+    // Populate before returning so the client gets the same shape as
+    // a "with rider" response (rider field is just null).
+    const updated = await Order.findById(id).populate("rider", "fullname contact");
+    return res
+      .status(200)
+      .json(new ApiResponse(200, updated, "Rider unassigned"));
+  }
+
+  // ----- 3b. ASSIGN path -----
+  // Validate the riderId is a usable string + lookup the rider.
+  if (!riderId || typeof riderId !== "string") {
+    throw new ApiError(400, "riderId is required (string) or null to unassign");
+  }
+  const rider = await User.findById(riderId);
+  if (!rider) {
+    throw new ApiError(404, "Rider not found");
+  }
+  if (rider.role !== "rider") {
+    throw new ApiError(400, "This user is not a rider");
+  }
+  if (!rider.isApproved) {
+    throw new ApiError(400, "This rider has not been approved yet");
+  }
+  if (rider.isBlacklisted) {
+    throw new ApiError(400, "This rider is currently suspended");
+  }
+
+  // Idempotent: assigning the same rider to the same order is a no-op.
+  if (order.rider && order.rider.toString() === riderId) {
+    const same = await Order.findById(id).populate("rider", "fullname contact");
+    return res
+      .status(200)
+      .json(new ApiResponse(200, same, "Rider is already assigned to this order"));
+  }
+
+  // ----- 4. Persist the assignment -----
+  order.rider = riderId;
+  order.riderAssignedAt = new Date();
+  order.riderAssignedBy = req.user._id;
+  await order.save();
+
+  // Populate before returning so the client gets the rider's name +
+  // contact in the same response (saves a round-trip on the client).
+  const updated = await Order.findById(id).populate("rider", "fullname contact");
+  return res
+    .status(200)
+    .json(new ApiResponse(200, updated, "Rider assigned successfully"));
 });
