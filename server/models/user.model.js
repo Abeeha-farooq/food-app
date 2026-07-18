@@ -70,9 +70,23 @@ const userSchema = new mongoose.Schema(
       default: true,
     },
 
-    // Password reset
+    // Password reset — two-phase flow:
+    //   1. forgot-password → user submits email → server sends OTP,
+    //      stores resetPasswordOTP + resetPasswordExpires
+    //   2. verify-reset-otp → user submits email + OTP → server marks
+    //      the user as "verified for reset" with a 5-min window
+    //      (resetPasswordVerified + resetPasswordVerifiedExpires)
+    //   3. reset-password → user submits email + new password → server
+    //      checks the verified window, then updates the password
+    //
+    // Why two phases instead of one? So the user has to PROVE they
+    // own the email (by entering the OTP) BEFORE we let them change
+    // the password — and the "verified" window is short (5 min) so
+    // an attacker who somehow got the OTP can't sit on it forever.
     resetPasswordOTP: { type: String, select: false },
     resetPasswordExpires: { type: Date, select: false },
+    resetPasswordVerified: { type: Boolean, default: false, select: false },
+    resetPasswordVerifiedExpires: { type: Date, select: false },
   },
   {
     // `timestamps` automatically adds `createdAt` and `updatedAt` fields.

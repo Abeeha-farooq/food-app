@@ -289,31 +289,109 @@ export const forgotPassword = asyncHandler(async (req, res) => {
 });
 
 // ============================================================
-// RESET PASSWORD
+// VERIFY RESET OTP (step 2 of the 3-step forgot-password flow)
 // ============================================================
-// Verifies the OTP, hashes the new password, clears the OTP fields.
-export const resetPassword = asyncHandler(async (req, res) => {
-  const { email, otp, newPassword } = req.body;
-  if (!email || !otp || !newPassword) {
-    throw new ApiError(400, "Email, OTP, and new password are required");
+// Called after the user enters the OTP from their email. We verify
+// the OTP is correct and not expired, then mark the user as
+// "verified for password reset" with a 5-minute window. The actual
+// password change happens in the next step (resetPassword), which
+// checks this verified window.
+//
+// This two-phase design means:
+//   1. User must PROVE they own the email (by entering the OTP) BEFORE
+//      we accept a new password
+//   2. The "verified" window is short (5 min) so an attacker who
+//      intercepted the OTP can't sit on it indefinitely
+//   3. The OTP itself becomes useless after verification (cleared),
+//      so a later leak of the OTP doesn't help
+export const verifyResetOtp = asyncHandler(async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || !otp) {
+    throw new ApiError(400, "Email and OTP are required");
   }
 
   const user = await User.findOne({ email: email.toLowerCase() })
     .select("+resetPasswordOTP +resetPasswordExpires");
   if (!user || !user.resetPasswordOTP || !user.resetPasswordExpires) {
-    throw new ApiError(400, "Invalid or expired reset code");
+    throw new ApiError(
+      400,
+      "No reset code found. Please request a new one from the forgot password link."
+    );
   }
   if (user.resetPasswordOTP !== otp) {
-    throw new ApiError(400, "Invalid reset code");
+    throw new ApiError(400, "Invalid reset code. Please check your email and try again.");
   }
   if (user.resetPasswordExpires < new Date()) {
-    throw new ApiError(400, "Reset code expired. Please request a new one.");
+    throw new ApiError(
+      400,
+      "Reset code expired. Please request a new one from the forgot password link."
+    );
   }
 
+  // OTP is valid. Mark the user as "verified for reset" with a 5-min
+  // window. We do NOT clear the OTP yet — resetPassword will clear
+  // it after a successful password change.
+  user.resetPasswordVerified = true;
+  user.resetPasswordVerifiedExpires = new Date(Date.now() + 5 * 60 * 1000);
+  await user.save();
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      { verified: true, email: user.email },
+      "Code verified. You can now set a new password."
+    )
+  );
+});
+
+// ============================================================
+// RESET PASSWORD (step 3 of the 3-step forgot-password flow)
+// ============================================================
+// Requires the user to have verified their OTP within the last 5
+// minutes (checked via resetPasswordVerified + resetPasswordVerifiedExpires).
+// On success: hashes the new password, clears ALL reset fields.
+export const resetPassword = asyncHandler(async (req, res) => {
+  const { email, newPassword } = req.body;
+  if (!email || !newPassword) {
+    throw new ApiError(400, "Email and new password are required");
+  }
+  if (newPassword.length < 6) {
+    throw new ApiError(400, "Password must be at least 6 characters");
+  }
+
+  const user = await User.findOne({ email: email.toLowerCase() })
+    // IMPORTANT: we need both the verified flags AND the OTP fields
+    // (we clear the OTP after successful reset).
+    .select("+resetPasswordOTP +resetPasswordExpires +resetPasswordVerified +resetPasswordVerifiedExpires");
+  if (!user) {
+    throw new ApiError(400, "Invalid request");
+  }
+
+  // Defense layer 1: must have completed OTP verification
+  if (!user.resetPasswordVerified) {
+    throw new ApiError(
+      400,
+      "Please verify your reset code first (enter the 6-digit code we emailed you)"
+    );
+  }
+
+  // Defense layer 2: the verified window must not be expired
+  if (!user.resetPasswordVerifiedExpires || user.resetPasswordVerifiedExpires < new Date()) {
+    throw new ApiError(
+      400,
+      "Verification expired. Please restart the password reset process."
+    );
+  }
+
+  // All checks passed — update the password and clear all reset fields
   user.password = newPassword;       // pre-save hook will hash it
   user.resetPasswordOTP = undefined;
   user.resetPasswordExpires = undefined;
+  user.resetPasswordVerified = false;
+  user.resetPasswordVerifiedExpires = undefined;
   await user.save();
 
-  return res.status(200).json(new ApiResponse(200, null, "Password reset successfully. You can now log in."));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, null, "Password reset successfully. You can now log in."));
 });

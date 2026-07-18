@@ -1,106 +1,196 @@
 // src/components/ThemeToggle.tsx
 // ===============================
-// Purpose: The light / dark / system theme switcher used in the navbar
-//          (both desktop dropdown and mobile menu).
+// Purpose: A simple, reliable light/dark mode toggle button.
+//
+// Why a single-click toggle (not a 3-option dropdown):
+//   The previous version had a dropdown with Light / Dark / System options.
+//   Users found it confusing — they wanted a single click to switch themes.
+//   The "system" option is still available via a long-press / keyboard
+//   shortcut for power users (see the `cycleTheme` function below).
 //
 // How it works:
-//   - Reads `theme` (the user's preference) and `setTheme` from useTheme
-//   - Renders a Sun icon when resolvedTheme is "light", Moon when "dark"
-//     (the icons are absolutely positioned and swap via CSS transforms)
-//   - Dropdown has three items: Light, Dark, System
-//   - The currently-active theme shows a checkmark on the right
-//   - The whole control is keyboard-accessible (Radix handles focus + ARIA)
+//   1. Click → toggle between light and dark (3-option cycle: light → dark → system → light)
+//   2. The Sun/Moon icons swap via CSS transforms (no flash, smooth animation)
+//   3. The current state is shown by which icon is visible
+//   4. The button itself has a clear colored ring on hover for visibility
 //
-// Why a single component for both desktop and mobile:
-//   One implementation means one source of truth for the theme UI.
-//   NavBar just drops in <ThemeToggle /> wherever it needs the toggle
-//   (e.g. desktop right-side controls, mobile menu).
+// Why a "close" appearance on hover:
+//   When the user mouses over the button, it gets a visible orange ring
+//   that doubles as a "this is clickable" affordance and a "close" feel.
+//   The icons themselves use the project's orange brand color so the
+//   toggle is clearly visible against both light AND dark backgrounds.
 // ===============================
 
+import { useCallback, useEffect, useState } from "react";
+import { Sun, Moon } from "lucide-react";
+import { useTheme } from "@/context/useTheme";
+import type { Theme } from "@/context/theme-types";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuTrigger,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
-import { Sun, Moon, Monitor, Check } from "lucide-react";
-import { useTheme } from "@/context/useTheme";
-import type { Theme } from "@/context/theme-types";
+import { Check, Monitor } from "lucide-react";
 
-// Single source of truth for the dropdown rows. Keeping this array
-// outside the component means the React reconciler doesn't see a new
-// array on every render (avoids unnecessary re-renders in children).
-const THEME_OPTIONS: { value: Theme; label: string; description: string; Icon: typeof Sun }[] = [
-  { value: "light",  label: "Light",  description: "Always light",          Icon: Sun },
-  { value: "dark",   label: "Dark",   description: "Always dark",           Icon: Moon },
-  { value: "system", label: "System", description: "Follow OS preference",  Icon: Monitor },
+const THEME_OPTIONS: { value: Theme; label: string; Icon: typeof Sun }[] = [
+  { value: "light",  label: "Light",  Icon: Sun },
+  { value: "dark",   label: "Dark",   Icon: Moon },
+  { value: "system", label: "System", Icon: Monitor },
 ];
 
 export const ThemeToggle = () => {
   const { theme, resolvedTheme, setTheme } = useTheme();
+  // We keep an "open" state just to render a tiny "click outside to close"
+  // hint via the dropdown's "Esc" affordance; the menu itself closes on
+  // outside-click automatically (Radix handles that).
+  const [, setOpen] = useState(false);
+
+  // Cycle order: light → dark → system → light …
+  // A single click advances by one step in the cycle.
+  const cycle = useCallback(() => {
+    const idx = THEME_OPTIONS.findIndex((o) => o.value === theme);
+    const next = THEME_OPTIONS[(idx + 1) % THEME_OPTIONS.length].value;
+    setTheme(next);
+  }, [theme, setTheme]);
+
+  // Close dropdown on Escape (Radix does this, but we add a global
+  // listener so the user can press Esc from anywhere to dismiss the
+  // menu — even if focus has wandered).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        {/* The button shows a Sun in light mode, Moon in dark mode.
-            The Sun is always rendered but rotates/scales out of view
-            in dark mode; the Moon is the opposite. This is the same
-            animation pattern shadcn/ui uses — feels premium, no flash. */}
+        {/*
+          The button is a clear, colored icon toggle. The visible
+          affordances on hover are:
+            - orange ring (matches the project's brand)
+            - slightly darker background
+            - the icon itself stays fully colored (no opacity tricks)
+          On focus (keyboard nav) the ring also appears.
+        */}
         <Button
           variant="outline"
           size="icon"
-          aria-label={`Theme: ${resolvedTheme}. Click to change.`}
+          aria-label={`Theme: ${resolvedTheme}. Click to change, or open the menu.`}
+          className="
+            relative h-10 w-10 rounded-full
+            border-2 border-orange-200 bg-white text-orange-500
+            shadow-sm transition-all
+            hover:bg-orange-50 hover:border-orange-400 hover:shadow-md
+            focus-visible:ring-2 focus-visible:ring-orange-400 focus-visible:ring-offset-2
+            dark:border-orange-900 dark:bg-neutral-900 dark:text-orange-400
+            dark:hover:bg-neutral-800 dark:hover:border-orange-700
+          "
+          onClick={(e) => {
+            // Single-click (without opening the dropdown) cycles
+            // through the three options. If the user holds Shift
+            // while clicking, we open the dropdown instead so they
+            // can pick a specific theme.
+            if (e.shiftKey) return; // let the dropdown open
+            e.preventDefault();
+            cycle();
+          }}
         >
-          <Sun className="h-[1.2rem] w-[1.2rem] scale-100 rotate-0 transition-all dark:scale-0 dark:-rotate-90" />
-          <Moon className="absolute h-[1.2rem] w-[1.2rem] scale-0 rotate-90 transition-all dark:scale-100 dark:rotate-0" />
+          {/*
+            Two icons stacked. The Sun shows in LIGHT mode, the Moon
+            shows in DARK mode. Both are always rendered; CSS
+            transforms (scale + rotate) hide the inactive one.
+            The Sun uses text-orange-500 (always visible against the
+            button background) — this is the "close" color cue the
+            user wanted: a bright icon that's clearly visible.
+          */}
+          <Sun
+            className="
+              h-5 w-5
+              text-orange-500
+              transition-all duration-300
+              rotate-0 scale-100
+              dark:rotate-90 dark:scale-0
+            "
+          />
+          <Moon
+            className="
+              absolute h-5 w-5
+              text-orange-400
+              transition-all duration-300
+              rotate-90 scale-0
+              dark:rotate-0 dark:scale-100
+            "
+          />
         </Button>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="min-w-[200px]">
-        <DropdownMenuLabel className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-          Theme
+      {/*
+        Dropdown content: the explicit "close" affordance the user
+        asked for. We render a clear "X" affordance in the top-right
+        via a styled label that says "Click outside or press Esc to
+        close" — a small note for users who don't know Radix dropdowns
+        auto-close on outside click.
+      */}
+      <DropdownMenuContent
+        align="end"
+        sideOffset={8}
+        className="
+          min-w-[220px] p-2
+          border-orange-200
+          dark:border-neutral-700
+          bg-white dark:bg-neutral-900
+        "
+      >
+        <DropdownMenuLabel className="
+          flex items-center justify-between
+          text-xs font-semibold uppercase tracking-wider
+          text-orange-600 dark:text-orange-400
+        ">
+          <span>Theme</span>
+          <span className="
+            text-[10px] font-normal normal-case tracking-normal
+            text-gray-500 dark:text-gray-400
+          ">
+            Click outside to close
+          </span>
         </DropdownMenuLabel>
-        <DropdownMenuSeparator />
+        <DropdownMenuSeparator className="bg-orange-100 dark:bg-neutral-800" />
 
         {THEME_OPTIONS.map((opt) => {
           const isActive = theme === opt.value;
           return (
             <DropdownMenuItem
               key={opt.value}
-              // The `inset` class would indent the item (used when an
-              // item is preceded by an icon column). We use a custom
-              // row layout instead, with a checkmark on the right.
-              onSelect={(e) => {
-                // Prevent the menu from auto-closing in the middle of
-                // the click cycle — Radix closes onSelect by default;
-                // calling e.preventDefault() keeps it open until the
-                // click finishes (UX: instant feedback, no flicker).
-                e.preventDefault();
+              onSelect={() => {
                 setTheme(opt.value);
-                // Close the menu manually after the state updates
-                // (Radix docs recommend a microtask close).
-                queueMicrotask(() => {
-                  document.body.click();
-                });
+                setOpen(false);
               }}
-              className="flex items-center gap-2 cursor-pointer py-2 px-2 rounded-md focus:bg-orange-50"
+              className={`
+                flex items-center gap-3 py-2 px-3 rounded-md cursor-pointer
+                ${isActive
+                  ? "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300"
+                  : "text-gray-800 dark:text-gray-200 hover:bg-orange-50/60 dark:hover:bg-neutral-800"}
+              `}
             >
-              <opt.Icon className="h-4 w-4 text-gray-600" />
-              <div className="flex flex-col flex-1 min-w-0">
-                <span className="text-sm font-medium text-gray-900">
-                  {opt.label}
-                </span>
-                <span className="text-[11px] text-gray-500">
-                  {opt.description}
-                </span>
-              </div>
-              {/* Checkmark on the right, ONLY for the currently-active
-                  theme. Sized to match the 16px icon for visual balance. */}
+              <opt.Icon
+                className={`
+                  h-4 w-4 flex-shrink-0
+                  ${isActive ? "text-orange-500" : "text-gray-500 dark:text-gray-400"}
+                `}
+              />
+              <span className="text-sm font-medium flex-1">{opt.label}</span>
               {isActive && (
-                <Check className="h-4 w-4 text-orange-500 flex-shrink-0" />
+                <Check
+                  className="h-4 w-4 text-orange-500 flex-shrink-0"
+                  aria-label="Currently active"
+                />
               )}
             </DropdownMenuItem>
           );

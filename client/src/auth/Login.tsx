@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { userLoginSchema, type LoginInputState } from "@/schema/userSchema";
 import { useAuth } from "@/context/useAuth";
 import api, { getErrorMessage } from "@/lib/api";
+import { ForgotPasswordFlow } from "./ForgotPasswordFlow";
 
 const Login = () => {
   const navigate = useNavigate();
@@ -40,6 +41,12 @@ const Login = () => {
     password: "",
   });
   const [loading, setLoading] = useState(false);
+
+  // ----- Forgot password flow toggle -----
+  // When true, the login form is replaced with the 3-step forgot
+  // password flow (see ForgotPasswordFlow.tsx). The user can click
+  // "Back to login" at any step to return to the regular form.
+  const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
 
   // Special state for the "email not verified" UX
   const [needsVerification, setNeedsVerification] = useState(false);
@@ -98,17 +105,30 @@ const Login = () => {
 
   return (
     <div className="flex items-center justify-center h-screen w-screen min-h-screen">
-      <form
-        onSubmit={submitHandler}
-        className="flex flex-col gap-5 md:p-8 w-full max-w-md rounded-lg mx-4"
-      >
+      <div className="flex flex-col gap-5 md:p-8 w-full max-w-md rounded-lg mx-4">
+        {/* ----- Brand mark (always visible) ----- */}
         <div className="text-center">
-          <h1 className="font-extrabold text-2xl mb-2">Welcome back</h1>
-          <p className="text-m text-gray-500">Log in to your FlavorCourt account</p>
+          <h1 className="font-extrabold text-2xl mb-2">
+            {forgotPasswordMode ? "Reset your password" : "Welcome back"}
+          </h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            {forgotPasswordMode
+              ? "We'll help you get back in"
+              : "Log in to your FlavorCourt account"}
+          </p>
         </div>
 
-        {!needsVerification ? (
-          <>
+        {/* ----- Forgot password flow (3-step inline) ----- */}
+        {forgotPasswordMode ? (
+          <ForgotPasswordFlow
+            // Prefill the email from the login form so the user doesn't
+            // have to retype it.
+            initialEmail={input.email}
+            onBackToLogin={() => setForgotPasswordMode(false)}
+          />
+        ) : !needsVerification ? (
+          /* ----- Normal login form ----- */
+          <form onSubmit={submitHandler} className="flex flex-col gap-4">
             <div className="relative w-full">
               <Input
                 type="email"
@@ -135,40 +155,44 @@ const Login = () => {
             </div>
 
             <div className="text-right -mt-2">
-              <Link
-                to="/forgot-password"
-                state={{ email: input.email }}
-                className="text-sm text-orange hover:text-hoverOrange"
+              <button
+                type="button"
+                onClick={() => setForgotPasswordMode(true)}
+                className="text-sm text-orange-500 hover:text-orange-600 font-medium"
               >
                 Forgot password?
-              </Link>
+              </button>
             </div>
 
             {loading ? (
               <button
                 disabled
                 type="button"
-                className="bg-orange hover:bg-hoverOrange flex items-center justify-center gap-2"
+                className="bg-orange hover:bg-hoverOrange text-white font-semibold flex items-center justify-center gap-2"
               >
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Please wait
               </button>
             ) : (
-              <button type="submit" className="bg-orange hover:bg-hoverOrange flex items-center justify-center gap-2">
+              <button
+                type="submit"
+                className="bg-orange hover:bg-hoverOrange text-white font-semibold flex items-center justify-center gap-2"
+              >
                 Login <ArrowRight className="w-4 h-4" />
               </button>
             )}
 
-            <span className="text-center">
+            <span className="text-center text-sm">
               Don't have an account?{" "}
-              <Link to="/signup" className="text-orange hover:text-hoverOrange">
+              <Link to="/signup" className="text-orange-500 hover:text-orange-600 font-medium">
                 Sign up
               </Link>
             </span>
-          </>
+          </form>
         ) : (
-          <div className="flex flex-col gap-4 p-4 border border-amber-200 bg-amber-50 rounded-lg">
-            <div className="flex items-start gap-2 text-amber-800">
+          /* ----- Email-not-verified UX ----- */
+          <div className="flex flex-col gap-4 p-4 border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 rounded-lg">
+            <div className="flex items-start gap-2 text-amber-800 dark:text-amber-200">
               <ShieldAlert className="w-5 h-5 mt-0.5 flex-shrink-0" />
               <div>
                 <h2 className="font-semibold mb-1">Verify your email</h2>
@@ -182,7 +206,7 @@ const Login = () => {
               <Link
                 to="/verify-email"
                 state={{ email: input.email }}
-                className="flex-1 bg-orange hover:bg-hoverOrange text-white py-2 rounded-md text-center font-semibold"
+                className="flex-1 bg-orange hover:bg-hoverOrange text-white py-2 px-4 rounded-lg text-center font-semibold"
               >
                 Verify your email
               </Link>
@@ -190,7 +214,7 @@ const Login = () => {
                 type="button"
                 onClick={handleResend}
                 disabled={resending}
-                className="flex items-center gap-1 px-4 py-2 border border-orange text-orange rounded-md hover:bg-orange-50 disabled:opacity-50"
+                className="flex items-center gap-1 px-4 py-2 border border-orange-500 text-orange-500 rounded-lg hover:bg-orange-50 dark:hover:bg-orange-950/30"
               >
                 {resending ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -203,13 +227,13 @@ const Login = () => {
             <button
               type="button"
               onClick={() => setNeedsVerification(false)}
-              className="text-sm text-gray-500 hover:text-gray-700"
+              className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
             >
               ← Back to login
             </button>
           </div>
         )}
-      </form>
+      </div>
     </div>
   );
 };
