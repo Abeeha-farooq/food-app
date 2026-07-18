@@ -87,6 +87,31 @@ const userSchema = new mongoose.Schema(
     resetPasswordExpires: { type: Date, select: false },
     resetPasswordVerified: { type: Boolean, default: false, select: false },
     resetPasswordVerifiedExpires: { type: Date, select: false },
+
+    // ----- Admin blacklist (account suspension) -----
+    // When isBlacklisted=true, the user cannot:
+    //   - log in (login controller returns 403)
+    //   - access any authenticated route (verifyJWT middleware returns 403)
+    //   - place orders
+    // The reason + which admin did it is stored for audit. Setting
+    // isBlacklisted=false (via the admin unblacklist endpoint) restores
+    // access immediately — no password reset needed.
+    isBlacklisted: {
+      type: Boolean,
+      default: false,
+      index: true,         // indexed so admin's "show only blacklisted" filter is fast
+    },
+    blacklistedAt: { type: Date, default: null },
+    blacklistedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    blacklistReason: {
+      type: String,
+      default: "",
+      maxlength: 500,
+    },
   },
   {
     // `timestamps` automatically adds `createdAt` and `updatedAt` fields.

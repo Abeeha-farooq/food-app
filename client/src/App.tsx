@@ -34,6 +34,7 @@ import Dashboard from './admin/Dashboard'
 import OrdersPage from './admin/OrdersPage'
 import RestaurantManagement from './admin/RestaurantManagement'
 import MenuManagement from './admin/MenuManagement'
+import UserManagement from './admin/UserManagement'
 
 const appRouter = createBrowserRouter([
   {
@@ -74,6 +75,7 @@ const appRouter = createBrowserRouter([
       { path: "orders",     element: <OrdersPage /> },
       { path: "restaurant", element: <RestaurantManagement /> },
       { path: "menu",       element: <MenuManagement /> },
+      { path: "users",      element: <UserManagement /> },
     ],
   },
 ])

@@ -219,6 +219,21 @@ export const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid email or password");
   }
 
+  // ----- Blacklist check -----
+  // If the admin has blacklisted this user, we block login even with
+  // the correct password. We DO return the reason so the client can
+  // show it to the user (admin can include it for transparency, e.g.
+  // "Repeated policy violations").
+  if (user.isBlacklisted) {
+    const reasonSuffix = user.blacklistReason
+      ? ` Reason: ${user.blacklistReason}`
+      : "";
+    throw new ApiError(
+      403,
+      `Your account has been suspended.${reasonSuffix} Contact support if you believe this is a mistake.`
+    );
+  }
+
   const token = generateToken(user);
   res.cookie("token", token, {
     httpOnly: true,

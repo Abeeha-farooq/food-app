@@ -37,6 +37,23 @@ export const verifyJWT = asyncHandler(async (req, _res, next) => {
     if (!user) {
       throw new ApiError(401, "Unauthorized: user not found");
     }
+
+    // ----- Blacklist check -----
+    // If an admin has blacklisted this user AFTER they logged in (so they
+    // have a valid JWT), we still block their request. This is the
+    // "already logged in" case — they don't have to log out, they just
+    // can't do anything. The axios interceptor on the client catches
+    // this 403 and redirects to /login.
+    if (user.isBlacklisted) {
+      const reasonSuffix = user.blacklistReason
+        ? ` Reason: ${user.blacklistReason}`
+        : "";
+      throw new ApiError(
+        403,
+        `Your account has been suspended.${reasonSuffix} Contact support if you believe this is a mistake.`
+      );
+    }
+
     req.user = user;
     next();
   } catch (err) {
