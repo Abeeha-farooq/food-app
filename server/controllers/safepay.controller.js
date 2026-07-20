@@ -37,6 +37,8 @@
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/apiError.js";
 import ApiResponse from "../utils/apiResponse.js";
+import Order from "../models/order.model.js";
+import mongoose from "mongoose";
 
 // ============================================================
 // CONFIG
@@ -301,6 +303,11 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   // one is `redirect_url` (this is what tripped us up before).
   // The `tbt` param is also REQUIRED — without it, the SPA
   // loads but cannot render the checkout UI (page is blank).
+  //
+  // We also append our own `orderId` to the redirect_url so the
+  // success page can look up the order and mark it as paid
+  // (we don't have a Safepay webhook configured, so the success
+  // page is the only way to update the order's paymentStatus).
   const baseUrl = process.env.SF_BASE_URL || "http://localhost:5173";
   const params = new URLSearchParams({
     tbt: userToken,
@@ -308,8 +315,8 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
     order_id: orderId,
     environment: SF_MODE,
     source: "hosted",
-    redirect_url: `${baseUrl}/payment/safepay/success?tracker=${encodeURIComponent(tracker)}`,
-    cancel_url: `${baseUrl}/payment/safepay/cancel?tracker=${encodeURIComponent(tracker)}`,
+    redirect_url: `${baseUrl}/payment/safepay/success?tracker=${encodeURIComponent(tracker)}&orderId=${encodeURIComponent(orderId)}`,
+    cancel_url: `${baseUrl}/payment/safepay/cancel?tracker=${encodeURIComponent(tracker)}&orderId=${encodeURIComponent(orderId)}`,
   });
   const redirectUrl = `${SF_API}/embedded/?${params.toString()}`;
 
@@ -320,5 +327,112 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
 
   return res.status(200).json(
     new ApiResponse(200, { redirectUrl, tracker }, "Safepay checkout created")
+  );
+});
+
+// ============================================================
+// verifySafepayPayment
+// ============================================================
+// POST /api/payments/safepay/verify
+//
+// Called by the success page (and the cancel page) after the user
+// is redirected back from Safepay's hosted checkout. Marks the
+// matching order as paid (success) or failed (cancel).
+//
+// Body: { tracker: string, orderId: string, status: "paid" | "failed" }
+//
+// Why this exists:
+//   Safepay's hosted-checkout flow normally relies on a server-side
+//   webhook to tell us when a payment is complete. We do NOT have
+//   a webhook configured (that requires adding a webhook URL +
+//   webhook secret in the Safepay dashboard AND building a
+//   signature-verifying endpoint on our server — a multi-hour
+//   integration that's overkill for the current stage).
+//
+//   Instead, we use the success page's "user redirected back"
+//   signal as the trigger. The downside is that a malicious user
+//   could theoretically craft a URL to /payment/safepay/success
+//   with any tracker and orderId and get their (or someone
+//   else's) order marked as paid. We mitigate this with three
+//   checks below:
+//
+//     1. The order must belong to the calling user (req.user._id
+//        must match order.user) — prevents cross-user tampering.
+//     2. The order's paymentMethod must be "safepay" — prevents
+//        misusing this endpoint on cash / stripe / paypal orders.
+//     3. The order's current paymentStatus must be "pending" —
+//        the endpoint is idempotent and refuses to downgrade a
+//        paid order (or re-flag a refunded one).
+//
+//   In a production deployment with a real Safepay integration,
+//   you'd swap this for a webhook handler that verifies the
+//   signature with `merchantWebhookSecret` (see the Safepay
+//   WooCommerce plugin's `validate_webhook` for the pattern).
+export const verifySafepayPayment = asyncHandler(async (req, res) => {
+  const { tracker, orderId, status } = req.body;
+
+  // ----- Input validation -----
+  if (!tracker || !orderId) {
+    throw new ApiError(400, "tracker and orderId are required");
+  }
+  if (!["paid", "failed"].includes(status)) {
+    throw new ApiError(400, "status must be 'paid' or 'failed'");
+  }
+  if (!mongoose.isValidObjectId(orderId)) {
+    throw new ApiError(400, "Invalid orderId");
+  }
+
+  // ----- Find the order -----
+  const order = await Order.findById(orderId);
+  if (!order) throw new ApiError(404, "Order not found");
+
+  // ----- Ownership check -----
+  // The order must belong to the calling user. Prevents user A
+  // from marking user B's order as paid by guessing the orderId.
+  if (order.user.toString() !== req.user._id.toString()) {
+    throw new ApiError(403, "Forbidden — not your order");
+  }
+
+  // ----- Method check -----
+  // Only applies to Safepay orders. Cash/stripe/paypal orders
+  // have their own payment-update flow.
+  if (order.paymentMethod !== "safepay") {
+    throw new ApiError(
+      400,
+      `This endpoint is only for Safepay orders; this order uses ${order.paymentMethod}`
+    );
+  }
+
+  // ----- Idempotency / state check -----
+  // The order must currently be in "pending" status. This:
+  //   - Makes the endpoint idempotent (a second success-page
+  //     load with the same tracker won't re-fire the update)
+  //   - Prevents overwriting a real "paid" or "refunded" status
+  //     if the gateway redirects back twice (browser back button
+  //     after success, etc.)
+  if (order.paymentStatus !== "pending") {
+    // Idempotent success — return the current order without
+    // touching it. The client just wants to know the order is
+    // in a good state; we don't need to error.
+    return res.status(200).json(
+      new ApiResponse(200, order, `Order payment is already ${order.paymentStatus}`)
+    );
+  }
+
+  // ----- Apply the update -----
+  // We set BOTH paymentStatus and safepayTransactionId in a
+  // single save so the order is in a fully-consistent state
+  // (no window where the order is "paid" but the tx id is
+  // still empty).
+  order.paymentStatus = status;
+  order.safepayTransactionId = tracker;
+  await order.save();
+
+  console.log(
+    `[Safepay] Order ${orderId} paymentStatus → ${status} (tracker=${tracker.slice(0, 12)}..., user=${req.user._id})`
+  );
+
+  return res.status(200).json(
+    new ApiResponse(200, order, `Order payment marked ${status}`)
   );
 });

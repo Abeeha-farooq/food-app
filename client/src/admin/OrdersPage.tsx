@@ -94,6 +94,24 @@ const OrdersPage = () => {
     }
   };
 
+  // ----- Helper: drop an order from the list + close its detail modal -----
+  // Used by terminal actions (cancel / reject). The order is still in
+  // the database with status="cancelled" — it just disappears from
+  // the admin's default "all" view so they don't see no-action rows.
+  // If the admin wants to see cancelled orders, they can filter by
+  // the "cancelled" status pill, or refresh the page to re-fetch
+  // everything from the server.
+  //
+  // Defined as a `function` (hoisted) rather than `const` so it can
+  // be referenced by any of the action handlers below without
+  // ordering concerns.
+  function removeOrderFromList(orderId: string) {
+    setOrders((prev) => prev.filter((o) => o._id !== orderId));
+    if (selectedOrder?._id === orderId) {
+      setSelectedOrder(null);
+    }
+  }
+
   // ----- Update an order's status (admin only) -----
   const updateStatus = async (orderId: string, newStatus: OrderStatus) => {
     if (!isAdmin) {
@@ -107,13 +125,23 @@ const OrdersPage = () => {
     setUpdatingOrderId(orderId);
     try {
       const res = await api.patch(`/orders/${orderId}/status`, { status: newStatus });
-      // Update in our local list
-      setOrders((prev) =>
-        prev.map((o) => (o._id === orderId ? res.data.data : o))
-      );
-      // Also update the selected order if it's open in the modal
-      if (selectedOrder?._id === orderId) {
-        setSelectedOrder(res.data.data);
+      // Cancellation is a TERMINAL action — the order is done, no further
+      // admin interaction is needed. Close the detail modal if it was open
+      // and drop the order from the list (the row is still in the DB, the
+      // admin can see it again by filtering for "cancelled" or by
+      // refreshing the page; we just don't want it sitting in the
+      // default "all" view as a no-action entry).
+      if (newStatus === "cancelled") {
+        removeOrderFromList(orderId);
+      } else {
+        // Update in our local list
+        setOrders((prev) =>
+          prev.map((o) => (o._id === orderId ? res.data.data : o))
+        );
+        // Also update the selected order if it's open in the modal
+        if (selectedOrder?._id === orderId) {
+          setSelectedOrder(res.data.data);
+        }
       }
       toast.success(`Order status updated to "${STATUS_LABELS[newStatus]}"`);
     } catch (err) {
@@ -204,6 +232,11 @@ const OrdersPage = () => {
     }
   };
 
+  // ----- Helper: drop an order from the list + close its detail modal -----
+  // (see `removeOrderFromList` near the top of the component — it's
+  // a function declaration so it's hoisted to the top of the scope
+  // and can be referenced from any of the action handlers below.)
+
   const rejectOrder = async (orderId: string) => {
     // Confirm — rejection is destructive (cancels the order). The
     // user can re-place, but we want to make sure admin didn't
@@ -214,11 +247,12 @@ const OrdersPage = () => {
     if (!ok) return;
     setUpdatingOrderId(orderId);
     try {
-      const res = await api.post(`/orders/${orderId}/reject`);
-      setOrders((prev) => prev.map((o) => (o._id === orderId ? res.data.data : o)));
-      if (selectedOrder?._id === orderId) {
-        setSelectedOrder(res.data.data);
-      }
+      await api.post(`/orders/${orderId}/reject`);
+      // Reject is terminal — close the detail modal (if it was open
+      // showing this order) and remove the row from the list. The
+      // order is still in the DB with status="cancelled"; the admin
+      // can see it again by filtering for "cancelled".
+      removeOrderFromList(orderId);
       toast.success("Order rejected");
     } catch (err) {
       toast.error(getErrorMessage(err));

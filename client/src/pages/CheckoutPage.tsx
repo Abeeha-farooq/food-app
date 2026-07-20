@@ -4,24 +4,21 @@
 //
 // Phases (single component, state machine):
 //   1. "form"        — user fills in delivery address + payment method
-//   2. "paying"      — Stripe <PaymentElement> is shown, user enters card
+//   2. "paying"      — PayPal Smart Buttons are shown (PayPal flow only)
 //   3. "submitting"  — final POST /api/orders in flight
 //   4. "confirmed"   — success! show the order confirmation
 //
-// Stripe payment flow (when user picks "card" or "wallet"):
-//   1. User clicks "Pay & place order"
-//   2. We POST /api/payments/create-intent with the cart total (in paisa)
-//   3. Server creates a Stripe PaymentIntent, returns clientSecret
-//   4. We call stripe.confirmPayment() with the clientSecret
-//   5. Stripe processes the payment (card, Apple Pay, etc.)
-//   6. On success, we POST /api/orders with stripePaymentIntentId
-//   7. Server re-verifies the payment with Stripe before saving the order
-//   8. Order saved with paymentStatus="paid"
+// Payment methods (3):
+//   - "cash"    → pay on delivery, order placed with paymentStatus="pending"
+//   - "paypal"  → PayPal Smart Buttons (popup), order placed with
+//                  paymentStatus="paid" after the user authorizes
+//   - "safepay" → Safepay hosted checkout (full-page redirect), order
+//                  placed first with paymentStatus="pending", then
+//                  the gateway collects payment and our verify
+//                  endpoint flips it to "paid" on the success callback.
 //
-// Why we don't simulate anymore:
-//   - Real payment is what users expect from a "real" food app
-//   - Stripe test mode lets us do this with zero risk (no real money)
-//   - Test cards like 4242 4242 4242 4242 always succeed in test mode
+// (Card / wallet via Stripe was removed — Safepay now covers the
+// "pay by card online" use case for this app.)
 // ===============================
 
 import { useMemo, useState } from "react";
@@ -39,7 +36,6 @@ import api, { getErrorMessage } from "@/lib/api";
 import { toast } from "sonner";
 import {
   MapPin,
-  CreditCard,
   Wallet,
   Banknote,
   ShoppingBag,
@@ -55,31 +51,20 @@ import {
   Landmark,
 } from "lucide-react";
 
-// Stripe — only imported if the publishable key is set
-import { loadStripe } from "@stripe/stripe-js";
-import {
-  Elements,
-  PaymentElement,
-  useElements,
-  useStripe,
-} from "@stripe/react-stripe-js";
-
 // PayPal — official React wrapper. Loads the PayPal SDK script
 // automatically and provides <PayPalButtons /> as a drop-in component.
 // We only render the provider if VITE_PAYPAL_CLIENT_ID is set, so the
-// app gracefully handles "PayPal not configured" the same way it
-// handles "Stripe not configured".
+// app gracefully handles "PayPal not configured" without breaking.
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 
 // ============================================================
 // TYPES
 // ============================================================
 
-// The five payment methods. "card" and "wallet" both use Stripe;
-// "paypal" uses PayPal Smart Buttons; "cash" is pay-on-delivery;
-// "safepay" uses Safepay hosted checkout (full-page redirect to
-// the gateway's own checkout page).
-type PaymentMethod = "cash" | "card" | "wallet" | "paypal" | "safepay";
+// The three remaining payment methods. Safepay is the only
+// "pay online by card" path now — it handles cards + Pakistani
+// mobile wallets (JazzCash / EasyPaisa) on its own hosted page.
+type PaymentMethod = "cash" | "paypal" | "safepay";
 
 // Shape of the order returned by POST /api/orders.
 interface PlacedOrder {
@@ -104,15 +89,6 @@ interface AppliedCoupon {
   discountValue: number;   // raw value (e.g. 20 for 20%, or Rs. 100)
 }
 
-// ============================================================
-// STRIPE-LOADED CHECK
-// ============================================================
-// The <Elements> provider needs a Stripe instance. We load it once
-// at module init (see main.tsx). If the env var is missing, we
-// render a "Stripe not configured" banner instead of the form.
-const STRIPE_PUBLISHABLE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
-const stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
-
 // PayPal client ID. If missing, we render a "PayPal not configured"
 // banner instead of the PayPal buttons.
 const PAYPAL_CLIENT_ID = import.meta.env.VITE_PAYPAL_CLIENT_ID;
@@ -127,7 +103,7 @@ const CheckoutPage = () => {
 
   // ----- Phase machine -----
   //   "form"        → user is filling out address + payment method
-  //   "paying"      → Stripe <PaymentElement> is shown, user is entering card
+  //   "paying"      → PayPal Smart Buttons are shown (PayPal flow only)
   //   "submitting"  → payment succeeded, we're POSTing the order
   //   "confirmed"   → order saved, show confirmation
   const [phase, setPhase] = useState<"form" | "paying" | "submitting" | "confirmed">("form");
@@ -138,14 +114,6 @@ const CheckoutPage = () => {
   });
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
 
-  // ----- Stripe state -----
-  // The clientSecret returned by /api/payments/create-intent. We pass
-  // it to <Elements options={{ clientSecret }}> to mount the PaymentElement.
-  // WHY clientSecret: it's the proof that this specific PaymentIntent
-  // is "ours" — Stripe's PaymentElement uses it to know which intent
-  // to confirm. Without it, Stripe doesn't know which card to charge.
-  const [clientSecret, setClientSecret] = useState<string | null>(null);
-
   // ----- Order state -----
   const [placedOrder, setPlacedOrder] = useState<PlacedOrder | null>(null);
 
@@ -154,7 +122,9 @@ const CheckoutPage = () => {
   // POST /api/coupons/validate to preview the discount. We keep
   // the applied coupon in state so:
   //   1. The order summary card shows the discount line.
-  //   2. The grandTotal we pass to Stripe is the DISCOUNTED total.
+  //   2. The grandTotal we send to the payment gateway is the
+  //      DISCOUNTED total (Safepay receives rupees, PayPal receives
+  //      dollars — both get the post-coupon amount).
   //   3. We re-send the code to /api/orders at place-order time
   //      (the server re-validates atomically — a coupon can expire
   //      between preview and place, so the client cannot just claim
@@ -168,11 +138,6 @@ const CheckoutPage = () => {
   const deliveryFee = 50;
   const couponDiscount = appliedCoupon?.discount ?? 0;
   const grandTotal = Math.max(0, totalPrice + deliveryFee - couponDiscount);
-  // Stripe expects amount in the SMALLEST currency unit (paisa for PKR).
-  // Rs. 1850 = 185000 paisa. Using integers avoids floating-point errors.
-  // IMPORTANT: this is the DISCOUNTED total — Stripe is asked to charge
-  // the customer the post-coupon amount, not the pre-coupon amount.
-  const grandTotalInPaisa = Math.round(grandTotal * 100);
 
   const isFormValid = deliveryAddress.trim().length > 5 && items.length > 0;
 
@@ -188,8 +153,10 @@ const CheckoutPage = () => {
   }, [items]);
 
   // ----- Handler: continue to payment phase -----
-  // For cash: skip the Stripe step and go straight to "submitting".
-  // For card/wallet: first create the PaymentIntent, then move to "paying".
+  // For cash: skip the payment step and go straight to order creation.
+  // For PayPal: move to the "paying" phase where the Smart Buttons live.
+  // For Safepay: place the order with paymentStatus="pending" and
+  //   redirect the browser to the gateway's hosted checkout.
   const handleContinue = async () => {
     if (!isFormValid) {
       toast.error("Please enter a delivery address");
@@ -205,7 +172,7 @@ const CheckoutPage = () => {
     }
 
     if (paymentMethod === "cash") {
-      // Cash on delivery — no Stripe/PayPal interaction. Go straight to order creation.
+      // Cash on delivery — go straight to order creation.
       await placeOrder({ paymentMethod: "cash" });
       return;
     }
@@ -226,26 +193,6 @@ const CheckoutPage = () => {
       toast.info("Click the PayPal button below to complete payment");
       setPhase("paying");
       return;
-    }
-
-    // Card or wallet → need a PaymentIntent
-    if (!stripePromise) {
-      toast.error("Stripe is not configured. Set VITE_STRIPE_PUBLISHABLE_KEY in client/.env");
-      return;
-    }
-
-    setPhase("paying");
-    try {
-      // Step 1 of the Stripe flow: ask our server to create a
-      // PaymentIntent. We pass the cart total in paisa.
-      const res = await api.post("/payments/create-intent", {
-        amount: grandTotalInPaisa,
-        currency: "pkr",
-      });
-      setClientSecret(res.data.data.clientSecret);
-    } catch (err) {
-      toast.error(getErrorMessage(err));
-      setPhase("form");  // back to the form so the user can retry
     }
   };
 
@@ -309,14 +256,17 @@ const CheckoutPage = () => {
   };
 
   // ----- The actual order placement (called after payment succeeds) -----
-  // For Stripe: pass the PaymentIntent ID
   // For PayPal: pass the order/capture/payer IDs (from the capture response)
   // For cash: pass null for everything; paymentStatus will be "pending"
   // The server uses these IDs to verify the payment with the processor
   // before saving the order. This is the defense-in-depth check.
+  //
+  // (Safepay has its own order-creation path in handleSafepayCheckout
+  // because the order is placed BEFORE the gateway redirect — the
+  // payment happens on Safepay's hosted page, then our verify
+  // endpoint flips paymentStatus to "paid" on the success callback.)
   const placeOrder = async (paymentData: {
-    paymentMethod: "stripe" | "paypal" | "cash";
-    stripePaymentIntentId?: string | null;
+    paymentMethod: "paypal" | "cash";
     paypalOrderId?: string;
     paypalPayerId?: string;
     paypalCaptureId?: string;
@@ -337,7 +287,6 @@ const CheckoutPage = () => {
         paymentStatus:
           paymentData.paymentMethod === "cash" ? "pending" : "paid",
         paymentMethod: paymentData.paymentMethod,
-        stripePaymentIntentId: paymentData.stripePaymentIntentId || undefined,
         paypalOrderId: paymentData.paypalOrderId || undefined,
         paypalPayerId: paymentData.paypalPayerId || undefined,
         paypalCaptureId: paymentData.paypalCaptureId || undefined,
@@ -570,7 +519,7 @@ const CheckoutPage = () => {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <CreditCard className="w-5 h-5 text-orange-500" />
+                <Wallet className="w-5 h-5 text-orange-500" />
                 Payment method
               </CardTitle>
             </CardHeader>
@@ -582,22 +531,6 @@ const CheckoutPage = () => {
                   description="Pay when your food arrives"
                   selected={paymentMethod === "cash"}
                   onSelect={() => setPaymentMethod("cash")}
-                  disabled={phase !== "form"}
-                />
-                <PaymentOption
-                  icon={<CreditCard className="w-6 h-6" />}
-                  label="Credit / Debit card"
-                  description="Visa, Mastercard, etc."
-                  selected={paymentMethod === "card"}
-                  onSelect={() => setPaymentMethod("card")}
-                  disabled={phase !== "form"}
-                />
-                <PaymentOption
-                  icon={<Wallet className="w-6 h-6" />}
-                  label="Digital wallet"
-                  description="Apple Pay, Google Pay, etc."
-                  selected={paymentMethod === "wallet"}
-                  onSelect={() => setPaymentMethod("wallet")}
                   disabled={phase !== "form"}
                 />
                 <PaymentOption
@@ -631,55 +564,9 @@ const CheckoutPage = () => {
             </CardContent>
           </Card>
 
-          {/* ----- Stripe Payment Element (only for card/wallet) ----- */}
-          {/* This card only appears in the "paying" phase for non-cash
-              methods. It hosts the Stripe <PaymentElement>, an iframe
-              served by Stripe where the user types their card details. */}
-          {phase === "paying" && paymentMethod !== "cash" && clientSecret && stripePromise && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Lock className="w-5 h-5 text-green-600" />
-                  Secure payment
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {/* <Elements> with the clientSecret is what gives the
-                    PaymentElement access to the intent. We pass
-                    appearance options to match our orange theme. */}
-                <Elements
-                  stripe={stripePromise}
-                  options={{
-                    clientSecret,
-                    appearance: {
-                      theme: "stripe",
-                      variables: {
-                        colorPrimary: "#D19254",
-                        colorBackground: "#ffffff",
-                        colorText: "#1f2937",
-                        fontFamily: "system-ui, sans-serif",
-                        borderRadius: "8px",
-                      },
-                    },
-                  }}
-                >
-                  <StripePaymentForm
-                    onSuccess={(paymentIntentId) =>
-                      placeOrder({
-                        paymentMethod: "stripe",
-                        stripePaymentIntentId: paymentIntentId,
-                      })
-                    }
-                    onBack={() => setPhase("form")}
-                  />
-                </Elements>
-              </CardContent>
-            </Card>
-          )}
-
           {/* ----- PayPal Smart Buttons (only for paypal method) ----- */}
-          {/* Same idea as the Stripe block above, but using the PayPal
-              SDK's React wrapper. The flow:
+          {/* Same idea as the old Stripe block above, but using the
+              PayPal SDK's React wrapper. The flow:
                 1. User clicks "PayPal" (we toggle paymentMethod to "paypal")
                 2. handleContinue() moves us to "paying" phase
                 3. The PayPal button renders here. createOrder hits our
@@ -787,15 +674,9 @@ const CheckoutPage = () => {
             </Card>
           )}
 
-          {/* Stripe-not-configured warning for non-cash methods */}
-          {phase === "form" && paymentMethod !== "cash" && !stripePromise && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
-              <strong>Stripe is not configured.</strong> Add{" "}
-              <code className="bg-amber-100 px-1 rounded">VITE_STRIPE_PUBLISHABLE_KEY</code> to{" "}
-              <code className="bg-amber-100 px-1 rounded">client/.env</code> to enable card payments.
-              See <a href="https://dashboard.stripe.com/test/apikeys" target="_blank" rel="noreferrer" className="underline">Stripe Dashboard</a> for test keys.
-            </div>
-          )}
+          {/* (Stripe-not-configured warning was removed along with the
+              Stripe card/wallet payment options. The PayPal-not-configured
+              warning lives inside the PayPal block above.) */}
         </div>
 
         {/* ============== RIGHT (1 col): order summary ============== */}
@@ -972,10 +853,11 @@ const CheckoutPage = () => {
                 </p>
               )}
 
-              {/* Trust badge — visible when paying */}
+              {/* Trust badge — visible when paying (PayPal flow only
+                  after the Stripe card/wallet options were removed) */}
               {phase === "paying" && (
                 <p className="text-xs text-gray-500 text-center flex items-center justify-center gap-1">
-                  <Lock className="w-3 h-3" /> Secured by Stripe
+                  <Lock className="w-3 h-3" /> PayPal Buyer Protection applies
                 </p>
               )}
             </CardContent>
@@ -1031,130 +913,5 @@ const PaymentOption = ({
     </div>
   </button>
 );
-
-// ============================================================
-// STRIPE PAYMENT FORM (sub-component)
-// ============================================================
-// This sub-component lives INSIDE <Elements> so it can use the
-// useStripe() and useElements() hooks. Its job:
-//   1. Render Stripe's <PaymentElement> (the card form)
-//   2. Handle the "Pay" button click
-//   3. Call stripe.confirmPayment() with the clientSecret
-//   4. On success → call onSuccess to trigger order placement
-//   5. On failure → show the error inline
-const StripePaymentForm = ({
-  onSuccess,
-  onBack,
-}: {
-  onSuccess: (paymentIntentId: string) => Promise<void>;
-  onBack: () => void;
-}) => {
-  // NOTE: onSuccess still takes a string (the Stripe paymentIntentId)
-  // because that's all Stripe knows about. The parent component
-  // adapts this to the unified payment object for the order API.
-  // We keep this signature narrow so StripePaymentForm only knows
-  // about Stripe — it doesn't need to know about PayPal.
-  const stripe = useStripe();
-  const elements = useElements();
-  const [isPaying, setIsPaying] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!stripe || !elements) {
-      // Stripe.js hasn't finished loading yet. Disable the button in
-      // this case (handled by the disabled state below).
-      return;
-    }
-
-    setIsPaying(true);
-    setErrorMessage(null);
-
-    // confirmPayment() returns a result object with `error` if it
-    // failed (card declined, 3DS required, etc.) or `paymentIntent`
-    // on success. It does NOT throw on most errors — we have to
-    // check `error` manually.
-    const { error, paymentIntent } = await stripe.confirmPayment({
-      elements,
-      // Don't redirect — we want to handle success/failure inline.
-      redirect: "if_required",
-      // confirmParams lets us pre-fill billing details. We pull the
-      // email from our auth context if available.
-      confirmParams: {
-        return_url: window.location.origin + "/order/status",
-        payment_method_data: {
-          billing_details: {
-            // We don't have name/email in scope here; PaymentElement
-            // will collect them if the user hasn't filled them in.
-          },
-        },
-      },
-    });
-
-    if (error) {
-      // The user saw a decline message inside the Stripe iframe.
-      // We just show a summary at the top of the form.
-      setErrorMessage(error.message || "Payment failed. Please try again.");
-      setIsPaying(false);
-      return;
-    }
-
-    if (paymentIntent && paymentIntent.status === "succeeded") {
-      // Payment succeeded! Hand off to the parent to place the order.
-      await onSuccess(paymentIntent.id);
-      // Don't setIsPaying(false) here — the parent will set phase to "submitting"
-    } else {
-      setErrorMessage("Payment is being processed. Please wait a moment.");
-      setIsPaying(false);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      {/* Stripe's hosted card form. Renders an iframe served by Stripe —
-          card data NEVER touches our React tree or our server. */}
-      <PaymentElement
-        options={{
-          layout: "tabs",  // "tabs" shows card/wallet as separate tabs
-        }}
-      />
-
-      {errorMessage && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-md p-3">
-          {errorMessage}
-        </div>
-      )}
-
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onBack}
-          disabled={isPaying}
-        >
-          Back
-        </Button>
-        <Button
-          type="submit"
-          disabled={!stripe || isPaying}
-          className="flex-1 bg-orange hover:bg-hoverOrange"
-        >
-          {isPaying ? (
-            <>
-              <Loader2 className="mr-2 w-4 h-4 animate-spin" />
-              Processing payment...
-            </>
-          ) : (
-            <>
-              <Lock className="mr-2 w-4 h-4" />
-              Pay now
-            </>
-          )}
-        </Button>
-      </div>
-    </form>
-  );
-};
 
 export default CheckoutPage;

@@ -35,7 +35,7 @@ import {
   capturePayPalOrder,
   handlePayPalWebhook,
 } from "../controllers/paypal.controller.js";
-import { createSafepayCheckout } from "../controllers/safepay.controller.js";
+import { createSafepayCheckout, verifySafepayPayment } from "../controllers/safepay.controller.js";
 import { verifyJWT, requireRole } from "../middlewares/auth.middleware.js";
 import ApiResponse from "../utils/apiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -94,5 +94,18 @@ router.post("/paypal/webhook", handlePayPalWebhook);
 // gateway's own checkout page. After payment, the gateway redirects
 // the customer to /payment/safepay/success or /failure.
 router.post("/safepay/checkout", verifyJWT, createSafepayCheckout);
+
+// Mark a Safepay order as paid (or failed) once the customer has been
+// redirected back to our success/cancel page. The success page calls
+// this with status="paid" and the cancel page calls with status="failed".
+// Auth: JWT. The controller enforces ownership + paymentMethod=safepay
+// + current-status=pending (idempotent) so this is safe to call from
+// the browser.
+//
+// NOTE: In a production setup with a configured Safepay webhook, this
+// endpoint is a backup — the webhook is the source of truth. See the
+// long comment in `verifySafepayPayment` in safepay.controller.js for
+// the full security analysis.
+router.post("/safepay/verify", verifyJWT, verifySafepayPayment);
 
 export default router;

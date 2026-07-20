@@ -2,19 +2,19 @@
 // ===============================
 // Purpose: The redirect target after a FAILED Safepay
 //          payment. The gateway sends the customer here with
-//          ?tracker=<orderId> in the URL.
+//          ?tracker=<tracker>&orderId=<mongoId> in the URL.
 //
 // What this page does:
-//   1. Reads the basketId (order ID) from the URL
-//   2. Shows a "Payment failed" message
-//   3. Provides links to retry the payment or go back to cart
+//   1. Reads the tracker and orderId from the URL
+//   2. Calls POST /api/payments/safepay/verify with status="failed"
+//      so the order's paymentStatus flips from "pending" to
+//      "failed" (the admin can then see the failed attempt
+//      in the dashboard and the customer can retry from the
+//      order status page)
+//   3. Shows a "Payment failed" message
 //
-// Note on the order state:
-//   The order is still in the database with paymentStatus="pending".
-//   The admin can see the failed attempt in the dashboard. The
-//   customer can retry the payment from the order status page
-//   (or place a new order). We don't auto-cancel the order here —
-//   the user might have just hit a network issue and want to retry.
+// Idempotency: the server endpoint refuses to overwrite an
+// already-paid order, so re-loading this page is safe.
 // ===============================
 
 import { useEffect, useState } from "react";
@@ -22,13 +22,34 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { XCircle, Home, RefreshCw, ShoppingCart, ArrowLeft } from "lucide-react";
+import { api } from "@/lib/api";
 
 const PaymentFailurePage = () => {
-  // Read ?tracker=<orderId> from the URL. Safepay calls this
-  // parameter the "tracker" and uses it to identify the order
-  // that failed.
+  // Read ?tracker=<tracker>&orderId=<mongoId> from the URL.
+  // Safepay's cancel path passes both, same as the success path.
   const [searchParams] = useSearchParams();
-  const tracker = searchParams.get("tracker") || searchParams.get("orderId") || "";
+  const tracker = searchParams.get("tracker") || "";
+  const orderId = searchParams.get("orderId") || "";
+
+  // Verify-on-mount: mark the order as failed. We don't BLOCK the
+  // page on this call (unlike the success page) — the user sees
+  // the failure UI immediately and the verify fires in the
+  // background. Even if it fails, the page still works; the order
+  // just stays in "pending" until the admin manually marks it.
+  useEffect(() => {
+    if (!tracker || !orderId) return;
+    api
+      .post("/payments/safepay/verify", {
+        tracker,
+        orderId,
+        status: "failed",
+      })
+      .catch(() => {
+        // Best-effort — don't show a toast here, the page is
+        // already showing a failure UI. Worst case the order
+        // stays "pending" and the admin resolves it manually.
+      });
+  }, [tracker, orderId]);
 
   // Slight visual delay before the failure animation settles.
   const [ready, setReady] = useState(false);
@@ -57,13 +78,13 @@ const PaymentFailurePage = () => {
             </h1>
             <p className="text-gray-600">
               We weren't able to process your payment with Safepay.
-              {tracker && (
+              {orderId && (
                 <>
                   {" "}Order{" "}
                   <span className="font-mono font-semibold">
-                    #{tracker.slice(-8)}
+                    #{orderId.slice(-8)}
                   </span>{" "}
-                  is still pending.
+                  is marked as failed.
                 </>
               )}
             </p>
