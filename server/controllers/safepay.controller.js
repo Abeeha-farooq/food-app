@@ -213,17 +213,27 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
 
   // ----- Construct the redirect URL -----
   // The hosted-checkout URL pattern. We use
-  // `${SF_API}/embedded/external/?tracker=...&environment=...`
-  // plus three more required params:
-  //   - `merchant`     = the PUBLIC key (sec_...) so the hosted
-  //                      page knows which merchant this checkout
-  //                      belongs to. Without this, the SPA loads
-  //                      but can't render the checkout UI — the
-  //                      page is blank (this was the bug).
-  //   - `success_url`  = where Safepay redirects after a
-  //                      successful payment.
-  //   - `cancel_url`   = where Safepay redirects after a
-  //                      cancelled / failed payment.
+  // `${SF_API}/embedded/external/?...` with as many session
+  // details in the URL as we can — the hosted page is a SPA
+  // that, when missing required params, loads its shell but
+  // can't render the checkout UI (the page is blank, with no
+  // visible error). Putting the details in the URL means the
+  // SPA can render immediately without an extra API round-trip.
+  //
+  // Params we include (and why):
+  //   - tracker      = the session token (the only TRUE identifier
+  //                   — all other params are metadata that the
+  //                   page can show in the checkout UI)
+  //   - environment  = sandbox / production
+  //   - merchant     = the PUBLIC key (sec_...) so the page
+  //                   knows which merchant this checkout belongs to
+  //   - success_url  = where Safepay redirects after payment
+  //   - cancel_url   = where Safepay redirects after cancel
+  //   - amount       = the total in PAISA (e.g. 6000 for Rs. 6000)
+  //   - currency     = "PKR"
+  //   - customer[email] / customer[phone] = pre-fill the form
+  //   - intent       = "CYBERSOURCE" (from the SDK example)
+  //   - mode         = "payment" (one-time, not subscription)
   //
   // The path is `/embedded/external/` (NOT `/embedded/`). The
   // SDK's Checkout.js uses `/embedded/` for the EMBEDDED flow
@@ -233,17 +243,26 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   // is wrong: `/embedded/external/error?error=Session%20expired!`
   // — the `/embedded/external/` segment is the checkout path.
   const baseUrl = process.env.SF_BASE_URL || "http://localhost:5173";
+  // amountInPaisa was already computed above (line ~110) for the
+  // request body, so we reuse it here for the redirect URL.
   const redirectUrl =
     `${SF_API}/embedded/external/` +
     `?tracker=${encodeURIComponent(token)}` +
     `&environment=${SF_MODE}` +
     `&merchant=${encodeURIComponent(publicKey)}` +
+    `&amount=${amountInPaisa}` +
+    `&currency=PKR` +
+    `&intent=CYBERSOURCE` +
+    `&mode=payment` +
     `&success_url=${encodeURIComponent(`${baseUrl}/payment/safepay/success`)}` +
-    `&cancel_url=${encodeURIComponent(`${baseUrl}/payment/safepay/failure`)}`;
+    `&cancel_url=${encodeURIComponent(`${baseUrl}/payment/safepay/failure`)}` +
+    `&customer[email]=${encodeURIComponent(email)}` +
+    `&customer[phone]=${encodeURIComponent(phone)}`;
 
   console.log(
-    `[Safepay] Checkout created (mode=${SF_MODE}, token=${token.slice(0, 12)}..., orderId=${orderId}, redirectUrl=${redirectUrl})`
+    `[Safepay] Checkout created (mode=${SF_MODE}, token=${token.slice(0, 12)}..., orderId=${orderId})`
   );
+  console.log(`[Safepay] Redirect URL: ${redirectUrl}`);
 
   return res.status(200).json(
     new ApiResponse(200, { redirectUrl, token }, "Safepay checkout created")
