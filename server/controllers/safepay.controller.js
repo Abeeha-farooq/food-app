@@ -371,6 +371,16 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
 export const verifySafepayPayment = asyncHandler(async (req, res) => {
   const { tracker, orderId, status } = req.body;
 
+  // Log the verify call at the top so we can see in the server
+  // logs whether the success page actually fires it. If the order
+  // is stuck in "pending" but this log doesn't appear, the client
+  // isn't reaching the endpoint at all (e.g. wrong URL, auth
+  // failure, or the success page isn't even mounting).
+  console.log(
+    `[Safepay] verify called: orderId=${orderId}, status=${status}, ` +
+    `tracker=${(tracker || "").slice(0, 12)}..., user=${req.user?._id}`
+  );
+
   // ----- Input validation -----
   if (!tracker || !orderId) {
     throw new ApiError(400, "tracker and orderId are required");
@@ -424,12 +434,29 @@ export const verifySafepayPayment = asyncHandler(async (req, res) => {
   // single save so the order is in a fully-consistent state
   // (no window where the order is "paid" but the tx id is
   // still empty).
+  //
+  // We ALSO auto-accept the order (status: "placed" → "confirmed")
+  // when the payment is "paid", because:
+  //   - The customer has actually paid; the admin's accept step
+  //     would just be a rubber-stamp
+  //   - Without auto-accept, paid orders still show up at the top
+  //     of the admin's order list under "placed" (the action queue),
+  //     which makes the admin's job harder (they have to filter
+  //     out already-paid orders before they can see what actually
+  //     needs attention)
+  //   - For cash on delivery the order stays at "placed" and
+  //     paymentStatus="pending" — those still need manual accept
   order.paymentStatus = status;
   order.safepayTransactionId = tracker;
+  if (status === "paid" && order.status === "placed") {
+    order.status = "confirmed";
+  }
   await order.save();
 
   console.log(
-    `[Safepay] Order ${orderId} paymentStatus → ${status} (tracker=${tracker.slice(0, 12)}..., user=${req.user._id})`
+    `[Safepay] Order ${orderId} paymentStatus → ${status}` +
+    (status === "paid" ? `, status → confirmed` : "") +
+    ` (tracker=${tracker.slice(0, 12)}..., user=${req.user._id})`
   );
 
   return res.status(200).json(

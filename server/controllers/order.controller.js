@@ -214,6 +214,23 @@ export const placeOrder = asyncHandler(async (req, res) => {
     }
   }
 
+  // ----- AUTO-ACCEPT for online-paid orders -----
+  // If the customer has already paid (Stripe / PayPal), we auto-accept
+  // the order: status goes "placed" → "confirmed" in the same create
+  // call. This matches the Safepay flow (where the verify endpoint
+  // auto-accepts on payment confirmation). Without this, paid orders
+  // would still appear at the top of the admin's order list under
+  // "placed" (the action queue), making the admin's job harder — they'd
+  // have to filter out already-paid orders before they could see what
+  // actually needs attention.
+  //
+  // Cash and "pending" Safepay orders stay at "placed" so the admin
+  // still gets a chance to review them before they're confirmed.
+  const autoAccepted =
+    finalPaymentStatus === "paid" &&
+    (paymentMethod === "stripe" || paymentMethod === "paypal");
+  const initialStatus = autoAccepted ? "confirmed" : "placed";
+
   const order = await Order.create({
     user: req.user._id,
     restaurant: restaurantId,
@@ -222,7 +239,7 @@ export const placeOrder = asyncHandler(async (req, res) => {
     deliveryFee,
     totalPrice,
     deliveryAddress,
-    status: "placed",
+    status: initialStatus,
     paymentStatus: finalPaymentStatus,
     // Coupon snapshot — see comment on the order model. Both fields
     // are denormalized so historical orders stay readable even if
@@ -233,7 +250,8 @@ export const placeOrder = asyncHandler(async (req, res) => {
     // depending on paymentMethod. "cash" orders leave them all empty.
     // "safepay" orders are placed with paymentStatus="pending"
     // (the gateway handles payment on its own hosted page) and the
-    // transactionId is set later by the gateway's webhook.
+    // transactionId is set later by the verify endpoint after the
+    // user is redirected back.
     paymentMethod: paymentMethod || "cash",
     stripePaymentIntentId: stripePaymentIntent?.id || "",
     paypalOrderId: paypalOrderId || "",
@@ -241,6 +259,12 @@ export const placeOrder = asyncHandler(async (req, res) => {
     paypalCaptureId: paypalCaptureId || "",
     safepayTransactionId: safepayTransactionId || "",
   });
+
+  if (autoAccepted) {
+    console.log(
+      `[Order] Auto-accepted order ${order._id} (${paymentMethod}, paymentStatus=paid)`
+    );
+  }
 
   return res.status(201).json(new ApiResponse(201, order, "Order placed successfully"));
 });
