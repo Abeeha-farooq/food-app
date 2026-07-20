@@ -18,6 +18,8 @@ import { pathToFileURL } from "node:url";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import helmet from "helmet";
+import { authLimiter, authVerifyLimiter, generalLimiter } from "./utils/rateLimiter.js";
 
 import connectDB from "./config/db.js";
 import authRoutes from "./routes/auth.route.js";
@@ -31,6 +33,14 @@ import ApiError from "./utils/apiError.js";
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Tell Express to trust the X-Forwarded-* headers from the Vercel
+// proxy. Required for express-rate-limit to see the real client IP
+// instead of the proxy's IP (which would lump every user behind the
+// proxy into one bucket and break rate limiting).
+// `1` = trust the FIRST hop (Vercel's edge). NOT `true` — trusting
+// all hops would let clients spoof their IP via headers.
+app.set("trust proxy", 1);
+
 // ============================================================
 // MIDDLEWARE: connect to MongoDB before every request
 // ============================================================
@@ -43,11 +53,6 @@ const PORT = process.env.PORT || 5000;
 // the request body to be a raw stream, not parsed) and the root health
 // check. We do this by mounting connectDB AFTER those routes, below.
 app.use(async (req, res, next) => {
-  // === DEBUG LOGGING (delete after 504 is fixed) ===
-  const reqStart = Date.now();
-  console.log(`[mw] ${req.method} ${req.path} — entering connectDB middleware`);
-  // === END DEBUG LOGGING ===
-
   // Health check — Vercel pings this for cold-start detection
   if (req.path === "/" && req.method === "GET") return next();
   // Stripe webhook — must receive the raw body for signature verification
@@ -56,14 +61,8 @@ app.use(async (req, res, next) => {
   if (req.path === "/api/payments/paypal/webhook" && req.method === "POST") return next();
   try {
     await connectDB();
-    // === DEBUG LOGGING ===
-    console.log(`[mw] ${req.method} ${req.path} — connectDB done in ${Date.now() - reqStart}ms, calling next()`);
-    // === END DEBUG LOGGING ===
     next();
   } catch (err) {
-    // === DEBUG LOGGING ===
-    console.error(`[mw] ${req.method} ${req.path} — connectDB THREW after ${Date.now() - reqStart}ms: ${err.message}`);
-    // === END DEBUG LOGGING ===
     next(err);
   }
 });
@@ -71,8 +70,35 @@ app.use(async (req, res, next) => {
 // ============================================================
 // GLOBAL MIDDLEWARE
 // ============================================================
+// The middleware below runs in this fixed order on EVERY request:
+//   1. helmet          — security response headers (very first, so
+//                        they're present on 404s, errors, CORS
+//                        preflights — every response, no exceptions)
+//   2. cors            — cross-origin checks (only matters in dev
+//                        and Vercel preview deploys; same-origin in
+//                        production)
+//   3. webhooks        — Stripe + PayPal need the raw body for
+//                        signature verification, so they're mounted
+//                        BEFORE express.json() below
+//   4. express.json    — parse JSON request bodies (16kb limit)
+//   5. express.urlencoded
+//   6. cookieParser    — parse cookies (JWT lives in an httpOnly cookie)
+//   7. request logger  — development aid; remove or quiet in prod
 
-// CORS — only matters in dev (localhost) and on Vercel preview deploys
+// ----- 1. Helmet: security response headers -----
+// Helmet sets sane defaults: X-Content-Type-Options: nosniff,
+// X-Frame-Options: SAMEORIGIN, Strict-Transport-Security (in prod),
+// Referrer-Policy, etc. We disable CSP (no useful default for an
+// API server — the SPA is hosted separately and has its own CSP
+// if needed) and keep the rest of the defaults intact.
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+  })
+);
+
+// ----- 2. CORS -----
+// Only matters in dev (localhost) and on Vercel preview deploys
 // (where the frontend and API live on the same domain, CORS is a no-op).
 // In production on a single Vercel project, both the client and the API
 // share the same origin (https://yourapp.vercel.app) so CORS does nothing.
@@ -107,6 +133,7 @@ app.use(
   })
 );
 
+// ----- 3. Webhook raw-body handlers -----
 // IMPORTANT: Stripe and PayPal webhooks must receive the RAW request
 // body (signature verification fails on parsed JSON). We mount them
 // BEFORE the json() middleware so the body stream is still intact.
@@ -121,16 +148,22 @@ app.post(
   paymentRoutes
 );
 
+// ----- 4. JSON body parser -----
 // Parse JSON request bodies (req.body becomes an object, not raw text)
 app.use(express.json({ limit: "16kb" }));
 
+// ----- 5. URL-encoded form data -----
 // Parse URL-encoded form data (rare, but nice to have)
 app.use(express.urlencoded({ extended: true }));
 
+// ----- 6. Cookies -----
 // Parse cookies (req.cookies becomes an object)
 app.use(cookieParser());
 
-// Simple request logger — useful while developing
+// ----- 7. Request logger (dev aid) -----
+// Simple request logger — useful while developing. In serverless prod
+// (Vercel), every request shows up in the function logs anyway, so
+// the duplicate line here mostly helps local dev.
 app.use((req, _res, next) => {
   console.log(`${new Date().toISOString()}  ${req.method}  ${req.originalUrl}`);
   next();
@@ -144,7 +177,24 @@ app.get("/", (_req, res) => {
   res.json({ message: "FoodApp API is running 🚀" });
 });
 
-app.use("/api/auth", authRoutes);
+// ============================================================
+// ROUTES — group by feature
+// ============================================================
+// Rate-limiter application order:
+//   1. /api/auth       — authLimiter (10/15min, broader bucket)
+//   2. (verify-email,
+//      verify-reset-otp,
+//      reset-password)  — authVerifyLimiter (5/15min, tighter for OTP)
+//   3. everything else — generalLimiter (100/15min, global safety net)
+//
+// The auth route uses authLimiter as the default for its endpoints,
+// but authVerifyLimiter is mounted INSIDE auth.route.js on the
+// specific verify-* / reset-* paths (where the OTP-attack surface
+// is highest). Both limiters share the same 429 JSON shape so the
+// client gets a consistent error.
+
+app.use("/api/auth", authLimiter, authRoutes);
+app.use(generalLimiter);   // applies to every route mounted AFTER this
 app.use("/api/user", userRoutes);
 app.use("/api/restaurants", restaurantRoutes);
 app.use("/api/orders", orderRoutes);

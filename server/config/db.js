@@ -34,29 +34,17 @@ if (!cached) {
  *     would kill the function instance and prevent retries)
  */
 const connectDB = async () => {
-  // === DEBUG LOGGING (delete after 504 is fixed) ===
-  const startTime = Date.now();
-  console.log(
-    `[db] connectDB called | MONGO_URI set: ${Boolean(process.env.MONGODB_URI)} | ` +
-    `MONGO_URI prefix: ${process.env.MONGODB_URI?.slice(0, 30)}... | ` +
-    `cached.conn: ${Boolean(cached.conn)} | cached.promise: ${Boolean(cached.promise)}`
-  );
-  // === END DEBUG LOGGING ===
-//ok 
   // If we already have a live connection, reuse it
   if (cached.conn) {
-    console.log(`[db] reusing cached connection (saved ${Date.now() - startTime}ms)`);
     return cached.conn;
   }
 
   // If a connection attempt is already in flight (rare race), wait for it
   if (!cached.promise) {
     if (!process.env.MONGODB_URI) {
-      console.error("[db] FATAL: MONGO_URI env var is missing");
-      throw new Error("MONGO_URI env var is not set");
+      console.error("[db] FATAL: MONGODB_URI env var is missing");
+      throw new Error("MONGODB_URI env var is not set");
     }
-    console.log("[db] starting new mongoose.connect()...");
-    const connectStart = Date.now();
     cached.promise = mongoose
       .connect(process.env.MONGODB_URI, {
         // Cap the connection attempt at 8 seconds — Vercel gives us 10s
@@ -65,27 +53,16 @@ const connectDB = async () => {
         serverSelectionTimeoutMS: 8000,
         connectTimeoutMS: 8000,
       })
-      .then((m) => {
-        console.log(`[db] mongoose.connect resolved in ${Date.now() - connectStart}ms`);
-        return m.connection;
-      });
-  } else {
-    console.log("[db] connection already in flight, waiting for existing promise");
+      .then((m) => m.connection);
   }
 
   try {
     cached.conn = await cached.promise;
-    console.log(
-      `[db] MongoDB connected in ${Date.now() - startTime}ms: ${cached.conn.host}/${cached.conn.name}`
-    );
     return cached.conn;
   } catch (error) {
     // Reset the promise so the next call can retry with a fresh attempt.
     cached.promise = null;
-    console.error(
-      `[db] MongoDB connection FAILED in ${Date.now() - startTime}ms: ${error.message}`
-    );
-    console.error(`[db] Error name: ${error.name}`);
+    console.error(`[db] MongoDB connection FAILED: ${error.message}`);
     throw error;
   }
 };

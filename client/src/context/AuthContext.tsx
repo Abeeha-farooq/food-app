@@ -36,20 +36,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   // On app mount: check if the user is already logged in
   // (they might have a valid JWT cookie from a previous session)
   // ------------------------------------------------------------
+  //
+  // Why we ALWAYS call /user/me (no localStorage gate):
+  //   The previous version only fired the request when a token
+  //   existed in localStorage. That broke the "cookie-only" path
+  //   — when a user logged in successfully but the localStorage
+  //   write didn't happen (e.g. storage quota, private mode, or any
+  //   future server-side change that sets the cookie without a
+  //   client-side copy). The user would appear logged out until
+  //   they manually logged in again, even with a perfectly valid
+  //   httpOnly cookie.
+  //
+  //   The fix: always try. The server's `verifyJWT` middleware
+  //   validates the cookie and returns 200 + user OR 401. The
+  //   axios response interceptor (in lib/api.ts) handles 401 by
+  //   clearing localStorage and redirecting to /login — so a stale
+  //   localStorage entry gets cleaned up automatically.
+  //
+  //   Cost: one extra HTTP request on every cold start. Cheap.
   useEffect(() => {
     const checkAuth = async () => {
-      // Check if we have a token in localStorage from a previous session
-      const token = localStorage.getItem("token");
-      if (!token) {
-        setIsLoading(false);
-        return;
-      }
       try {
-        // Ask the server "who am I?" using the token
+        // Ask the server "who am I?" — the httpOnly JWT cookie
+        // travels with this request (axios withCredentials: true).
         const res = await api.get("/user/me");
         setUser(res.data.data);
       } catch {
-        // Token is bad/expired — interceptor already cleared it
+        // 401 (or any failure) = not logged in. The interceptor
+        // already cleared any stale localStorage token.
         setUser(null);
       } finally {
         setIsLoading(false);
