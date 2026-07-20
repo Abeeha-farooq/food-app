@@ -212,20 +212,26 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   }
 
   // ----- Construct the redirect URL -----
-  // The hosted-checkout URL pattern. We use the `${SF_API}/embedded/<token>`
-  // path that the SDK's Checkout.createCheckoutUrl uses. The token
-  // is passed as a query param, not a path segment.
+  // The hosted-checkout URL pattern. We use
+  // `${SF_API}/embedded/external/?tracker=...&environment=...`.
   //
-  // NOTE: the exact URL pattern may vary — if Safepay's hosted
-  // page doesn't load with this URL, try:
-  //   - https://sandbox.api.getsafepay.com/order/payments/v3/<token>
-  //   - https://getsafepay.com/pay/<token>
-  // The first one (with /embedded/) is what the SDK's own
-  // createCheckoutUrl helper builds.
-  const redirectUrl = `${SF_API}/embedded/?tracker=${encodeURIComponent(token)}&environment=${SF_MODE}`;
+  // The path is `/embedded/external/` (NOT `/embedded/`). The
+  // SDK's Checkout.js uses `/embedded/` for the EMBEDDED flow
+  // (iframe in your page); the EXTERNAL flow (full-page redirect,
+  // which is what we want) uses `/embedded/external/`. This was
+  // confirmed by the error page URL Safepay shows when something
+  // is wrong: `/embedded/external/error?error=Session%20expired!`
+  // — the `/embedded/external/` segment is the checkout path.
+  //
+  // If you see "Session expired" on the next attempt, the URL
+  // path is correct but the session has a short TTL — try again
+  // immediately (each click of "Pay with Safepay" creates a fresh
+  // session). If the issue persists, the `tracker` token may need
+  // to go in the path instead of the query string.
+  const redirectUrl = `${SF_API}/embedded/external/?tracker=${encodeURIComponent(token)}&environment=${SF_MODE}`;
 
   console.log(
-    `[Safepay] Checkout created (mode=${SF_MODE}, token=${token.slice(0, 12)}..., orderId=${orderId})`
+    `[Safepay] Checkout created (mode=${SF_MODE}, token=${token.slice(0, 12)}..., orderId=${orderId}, redirectUrl=${redirectUrl})`
   );
 
   return res.status(200).json(
