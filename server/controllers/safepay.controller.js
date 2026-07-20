@@ -213,7 +213,17 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
 
   // ----- Construct the redirect URL -----
   // The hosted-checkout URL pattern. We use
-  // `${SF_API}/embedded/external/?tracker=...&environment=...`.
+  // `${SF_API}/embedded/external/?tracker=...&environment=...`
+  // plus three more required params:
+  //   - `merchant`     = the PUBLIC key (sec_...) so the hosted
+  //                      page knows which merchant this checkout
+  //                      belongs to. Without this, the SPA loads
+  //                      but can't render the checkout UI — the
+  //                      page is blank (this was the bug).
+  //   - `success_url`  = where Safepay redirects after a
+  //                      successful payment.
+  //   - `cancel_url`   = where Safepay redirects after a
+  //                      cancelled / failed payment.
   //
   // The path is `/embedded/external/` (NOT `/embedded/`). The
   // SDK's Checkout.js uses `/embedded/` for the EMBEDDED flow
@@ -222,13 +232,14 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   // confirmed by the error page URL Safepay shows when something
   // is wrong: `/embedded/external/error?error=Session%20expired!`
   // — the `/embedded/external/` segment is the checkout path.
-  //
-  // If you see "Session expired" on the next attempt, the URL
-  // path is correct but the session has a short TTL — try again
-  // immediately (each click of "Pay with Safepay" creates a fresh
-  // session). If the issue persists, the `tracker` token may need
-  // to go in the path instead of the query string.
-  const redirectUrl = `${SF_API}/embedded/external/?tracker=${encodeURIComponent(token)}&environment=${SF_MODE}`;
+  const baseUrl = process.env.SF_BASE_URL || "http://localhost:5173";
+  const redirectUrl =
+    `${SF_API}/embedded/external/` +
+    `?tracker=${encodeURIComponent(token)}` +
+    `&environment=${SF_MODE}` +
+    `&merchant=${encodeURIComponent(publicKey)}` +
+    `&success_url=${encodeURIComponent(`${baseUrl}/payment/safepay/success`)}` +
+    `&cancel_url=${encodeURIComponent(`${baseUrl}/payment/safepay/failure`)}`;
 
   console.log(
     `[Safepay] Checkout created (mode=${SF_MODE}, token=${token.slice(0, 12)}..., orderId=${orderId}, redirectUrl=${redirectUrl})`
