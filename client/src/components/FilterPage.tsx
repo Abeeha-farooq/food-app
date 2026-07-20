@@ -53,13 +53,20 @@ const FilterPage = ({
   const hasActive = activeCount > 0;
 
   const handleCuisineToggle = (value: string) => {
-    // Keep the original case ("Pizza", "Burger") — the backend's cuisine filter
-    // is now case-insensitive, and the badge display in SearchPage needs the
-    // capitalized form to look right ("pizza ✕" would be ugly).
+    // Single-select, like the price filter below. Clicking a new
+    // cuisine REPLACES the previous one — you can only narrow the
+    // list to one cuisine at a time. Clicking the already-selected
+    // cuisine again clears it (sets to []), so the user can
+    // remove the filter without hunting for the "Reset" button.
+    //
+    // The value is kept in its original capitalized form
+    // ("Pizza", "Burger") because:
+    //   1. The backend's cuisine filter is case-insensitive, so
+    //      case doesn't affect matching.
+    //   2. The badge display in SearchPage needs the capitalized
+    //      form to look right ("pizza ✕" would be ugly).
     setSelectedCuisines(
-      selectedCuisines.includes(value)
-        ? selectedCuisines.filter((c) => c !== value)
-        : [...selectedCuisines, value]
+      selectedCuisines.includes(value) ? [] : [value]
     );
   };
 
@@ -67,6 +74,11 @@ const FilterPage = ({
     // Price is stored lowercase in the DB (enum: "low" | "medium" | "high"),
     // so we lowercase here. The display is capitalized via the priceRanges
     // array, but the value sent to the API must match the enum.
+    //
+    // Single-select for the same reason as cuisine: only one
+    // price bucket at a time. A cuisine + a price CAN coexist
+    // (the two arrays are independent), so you can narrow the
+    // list to "Desi + Low" without one resetting the other.
     const lower = value.toLowerCase();
     setSelectedPrices(selectedPrices.includes(lower) ? [] : [lower]);
   };
