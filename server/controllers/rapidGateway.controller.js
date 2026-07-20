@@ -34,7 +34,27 @@ import ApiResponse from "../utils/apiResponse.js";
 // ============================================================
 // CONFIG
 // ============================================================
+// The token endpoint is the SAME for both sandbox and production
+// — only the merchant ID / client secret differ between the two.
+//
+// The transaction endpoint, however, is DIFFERENT:
+//   - sandbox: /sandbox/process-transaction
+//   - live:    /rapid/process-transaction
+//
+// We pick the right one based on `RG_MODE` (same pattern as
+// PayPal's `PAYPAL_MODE`). Defaults to "sandbox" so a fresh
+// deployment can't accidentally hit the real payment endpoint
+// before the merchant has finished testing.
+//
+// If you don't set RG_MODE, every checkout call goes to the
+// SANDBOX. This is the safe default — no real money moves even
+// if you accidentally use sandbox credentials in production.
 const RG_API = "https://secure.rapid-gateway.com";
+const RG_MODE = (process.env.RG_MODE || "sandbox").toLowerCase();
+const RG_TRANSACTION_ENDPOINT =
+  RG_MODE === "live"
+    ? `${RG_API}/rapid/process-transaction`
+    : `${RG_API}/sandbox/process-transaction`;
 
 // Reusable access token cache (singleton across serverless invocations
 // in the same container). Same pattern as PayPal's token cache.
@@ -104,6 +124,12 @@ const getRapidGatewayAccessToken = async () => {
   tokenCache.token = data.access_token;
   tokenCache.expiresAt = now + ttlMs - 60_000;
 
+  // Log once per token fetch (which is rare thanks to the cache)
+  // so the dev can see which mode the server is in. Helpful when
+  // debugging "why am I hitting the live endpoint" or "why is my
+  // sandbox payment not going through".
+  console.log(`[Rapid Gateway] OAuth token acquired (mode=${RG_MODE}, endpoint=${RG_TRANSACTION_ENDPOINT}, ttl=${data.expires_in}s)`);
+
   return data.access_token;
 };
 
@@ -169,7 +195,7 @@ export const createRapidGatewayCheckout = asyncHandler(async (req, res) => {
     PROCCODE: "0",
   });
 
-  const payRes = await fetch(`${RG_API}/rapid/process-transaction`, {
+  const payRes = await fetch(RG_TRANSACTION_ENDPOINT, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
