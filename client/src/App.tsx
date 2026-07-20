@@ -71,6 +71,13 @@ const appRouter = createBrowserRouter([
       </ProtectedRoute>
     ),
     children: [
+      // `index: true` makes /admin render the Dashboard component.
+      // Without this, the parent route matches but the <Outlet />
+      // inside AdminLayout has no child route to render → blank
+      // white screen. The "dashboard" sub-route is kept for
+      // /admin/dashboard too, in case any other code (or a
+      // browser-refresh from an old tab) lands there.
+      { index: true,        element: <Dashboard /> },
       { path: "dashboard",  element: <Dashboard /> },
       { path: "orders",     element: <OrdersPage /> },
       { path: "restaurant", element: <RestaurantManagement /> },
