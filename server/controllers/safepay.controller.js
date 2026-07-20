@@ -39,7 +39,15 @@ import ApiResponse from "../utils/apiResponse.js";
 // ============================================================
 // CONFIG
 // ============================================================
-const SF_MODE = (process.env.SF_MODE || "sandbox").toLowerCase();
+// IMPORTANT — the `.trim()` call defensively strips any leading
+// or trailing whitespace (including TAB characters) that might
+// have been accidentally pasted into the env var. A TAB in
+// SF_MODE would produce `?environment=\tsandbox&...` in the
+// redirect URL — a value Safepay's hosted page doesn't recognize,
+// causing the checkout to render blank. This is the kind of bug
+// that's invisible in normal logs but obvious once you see the
+// actual URL.
+const SF_MODE = (process.env.SF_MODE || "sandbox").toLowerCase().trim();
 const SF_API = SF_MODE === "live"
   ? "https://api.getsafepay.com"
   : "https://sandbox.api.getsafepay.com";
@@ -80,8 +88,12 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   }
 
   // ----- Env var validation (with diagnostic log) -----
-  const publicKey = process.env.SF_PUBLIC_KEY;
-  const secretKey = process.env.SF_SECRET_KEY;
+  // .trim() on both — same defensive reason as SF_MODE. A stray
+  // space or tab in the env var would cause 401/403 from Safepay
+  // because the auth header value wouldn't match what the gateway
+  // expects.
+  const publicKey = process.env.SF_PUBLIC_KEY?.trim();
+  const secretKey = process.env.SF_SECRET_KEY?.trim();
   if (!publicKey || !secretKey) {
     console.error(
       `[Safepay] NOT CONFIGURED — SF_PUBLIC_KEY: ${
