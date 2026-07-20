@@ -8,28 +8,30 @@
 //   - This file handles Safepay (hosted checkout, API-key auth).
 //
 // Safepay flow (server side):
-//   1. createSafepayCheckout  — POST /order/payments/v3/ to Safepay with
-//                               the secret key in the x-sfpy-merchant-secret
-//                               header. Safepay returns a "tracker" object
-//                               containing a token. We construct the
-//                               hosted-checkout URL from the token and
-//                               return it to the client.
+//   1. createSafepayCheckout
+//        a. POST /client/passport/v1/token  → get the "tbt" user token
+//        b. POST /order/payments/v3/        → get the tracker token
+//        c. Build the hosted-checkout URL with the OFFICIAL Safepay
+//           URL pattern (verified from the open-source Safepay
+//           WooCommerce plugin: github.com/getsafepay/
+//           safepay-checkout-woocommerce, file
+//           `SafepayPaymentGateway.php`, function `prepareRedirectUrl`).
 //   2. [customer completes payment on Safepay's hosted page]
-//   3. Safepay redirects to /payment/safepay/success or /failure.
+//   3. Safepay redirects to /payment/safepay/success?tracker=...
 //
-// The values below were confirmed by reading the @sfpy/node-core
-// SDK source code (the official Safepay Node.js library) on npm:
-//   https://www.npmjs.com/package/@sfpy/node-core
-//   https://unpkg.com/@sfpy/node-core@0.3.5/
-//
-// Key facts (all from the SDK source):
+// Key facts (verified from the @sfpy/node-core SDK source on npm + the
+// safepay-checkout-woocommerce open-source plugin on GitHub):
 //   - Auth header is `x-sfpy-merchant-secret: <secret_key>` — NOT Bearer
-//   - Endpoint is `POST /order/payments/v3/`
-//   - Request body needs: merchant_api_key, intent, mode, currency, amount
-//   - amount is in PAISA (multiply rupees by 100) — e.g. Rs. 6000 → 600000
-//   - Response shape: { data: { tracker: { token: "..." } } }
+//   - Token endpoint:  POST /client/passport/v1/token  (returns the "tbt")
+//   - Checkout endpoint: POST /order/payments/v3/     (returns the tracker)
+//   - Hosted URL path: /embedded/   (NOT /embedded/external/)
+//   - The hosted URL needs `tbt=<userToken>&tracker=<tracker>
+//     &environment=<env>&source=hosted
+//     &order_id=<our-mongo-id>
+//     &redirect_url=<success>&cancel_url=<cancel>`
+//   - amount in PAISA (multiply rupees by 100)
 //   - Sandbox host: https://sandbox.api.getsafepay.com
-//   - Live host:     https://api.getsafepay.com
+//   - Live host:    https://api.getsafepay.com
 // ===============================
 
 import asyncHandler from "../utils/asyncHandler.js";
@@ -44,18 +46,18 @@ import ApiResponse from "../utils/apiResponse.js";
 // have been accidentally pasted into the env var. A TAB in
 // SF_MODE would produce `?environment=\tsandbox&...` in the
 // redirect URL — a value Safepay's hosted page doesn't recognize,
-// causing the checkout to render blank. This is the kind of bug
-// that's invisible in normal logs but obvious once you see the
-// actual URL.
+// causing the checkout to render blank.
 const SF_MODE = (process.env.SF_MODE || "sandbox").toLowerCase().trim();
-const SF_API = SF_MODE === "live"
-  ? "https://api.getsafepay.com"
-  : "https://sandbox.api.getsafepay.com";
+const SF_API =
+  SF_MODE === "production"
+    ? "https://api.getsafepay.com"
+    : SF_MODE === "development"
+      ? "https://dev.api.getsafepay.com"
+      : "https://sandbox.api.getsafepay.com";
 
-// The endpoint path for creating a payment session. This is the
-// "checkout creation" endpoint in Safepay's API. The path was
-// verified from the @sfpy/node-core SDK source —
-// `basePath: "/order"` + `path: "/payments/v3/"` = `/order/payments/v3/`.
+// Endpoint paths — taken from Safepay's open-source WooCommerce plugin
+// (`includes/enums/SafepayEndpoints.php`).
+const SF_PASSPORT_ENDPOINT = "/client/passport/v1/token";
 const SF_CHECKOUT_ENDPOINT = "/order/payments/v3/";
 
 // ============================================================
@@ -65,20 +67,29 @@ const SF_CHECKOUT_ENDPOINT = "/order/payments/v3/";
 //
 // Body: { amount, phone, email, orderId, merchantName? }
 //
-// 1. Sends a server-to-server POST to Safepay's /order/payments/v3/
-//    with the secret key in the x-sfpy-merchant-secret header
-//    and the public key + order details in the JSON body.
-// 2. Safepay returns a "tracker" with a token.
-// 3. We construct the hosted-checkout URL: `${SF_API}/embedded/<token>`
-//    (or similar — see below for the exact URL pattern).
-// 4. We return { redirectUrl } to the client, which does
-//    `window.location.href = redirectUrl` to send the user to
-//    Safepay's hosted page.
+// What this function does (matches the official Safepay hosted-checkout
+// flow, as used in safepay-checkout-woocommerce):
 //
-// The order has ALREADY been placed by the client (with
-// paymentStatus="pending" — the order ID we send to Safepay
-// is the merchant_reference so we can match the redirect back
-// to the order).
+//   1. POST /client/passport/v1/token
+//      → returns { data: "<userToken>" }
+//      → the userToken is the "tbt" param the hosted page needs
+//        to authenticate its OWN client-side API calls. Without
+//        it, the page loads its shell but cannot render the
+//        checkout UI (the page is BLANK with no visible error).
+//
+//   2. POST /order/payments/v3/
+//      → returns { data: { tracker: { token: "<tracker>" } } }
+//      → the tracker is the unique session ID for this checkout
+//
+//   3. Build the redirect URL with the EXACT param names and
+//      order from Safepay's plugin. The page is a SPA that
+//      refuses to render when its required params are missing
+//      or mis-named — common failure mode is `success_url`
+//      (which our old code used) instead of `redirect_url`.
+//
+// We return { redirectUrl, tracker } to the client, which does
+// `window.location.href = redirectUrl` to send the user to
+// Safepay's hosted page.
 export const createSafepayCheckout = asyncHandler(async (req, res) => {
   const { amount, phone, email, orderId, merchantName } = req.body;
 
@@ -106,177 +117,208 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
     );
   }
 
-  // ----- Build the request body -----
-  // Field names match the @sfpy/node-core SDK example (which calls
-  // safepay.payments.session.setup({...})). The body uses camelCase
-  // (matching the SDK's JS interface), not snake_case.
-  //
-  // CRITICAL: amount is in PAISA, not rupees. The client sends
-  // the order total in rupees (e.g. 6000 for Rs. 6000), and we
-  // multiply by 100 here. This matches how the SDK example works
-  // (6000 PKR → 600000 in the body).
-  //
-  // intent: "CYBERSOURCE" is the default from the SDK's homepage
-  // example. Safepay may have other intent values for different
-  // payment methods — adjust if needed.
-  const amountInPaisa = Math.round(Number(amount) * 100);
-  const requestBody = {
-    merchant_api_key: publicKey,
-    intent: "CYBERSOURCE",
-    mode: "payment",   // one-time payment (vs "subscription" for recurring)
-    currency: "PKR",
-    amount: amountInPaisa,
-    // merchant_reference is our own order ID — Safepay echoes it
-    // back on the redirect so the success page can match the
-    // redirect to the original order.
-    merchant_reference: orderId,
-  };
-
-  // ----- Send the request -----
+  // ----- Build the auth headers (shared by both API calls) -----
   // The auth header is `x-sfpy-merchant-secret: <secret>` — NOT
   // a Bearer token. This is the single most-likely-to-be-wrong
   // thing in a Safepay integration; it's easy to assume "Bearer"
   // because that's the OAuth2 / Stripe / PayPal convention.
-  const requestUrl = `${SF_API}${SF_CHECKOUT_ENDPOINT}`;
+  const authHeaders = {
+    "x-sfpy-merchant-secret": secretKey,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
 
+  // ----- Step 1: get the user token (tbt) from the passport endpoint -----
+  // The hosted checkout page calls Safepay's API from the BROWSER
+  // (for things like fetching available payment methods and
+  // processing the payment). Those client-side calls need a
+  // short-lived token, which we get here on the server and pass
+  // in the `tbt` URL param.
+  //
+  // The endpoint and request shape were taken directly from
+  // safepay-checkout-woocommerce's `SafePayApiHandler.php`:
+  //   $tokenUrl = esc_url_raw($baseURL . SafepayEndpoints::TOKEN_ENDPOINT->value);
+  //   // where TOKEN_ENDPOINT = '/client/passport/v1/token'
+  const tokenUrl = `${SF_API}${SF_PASSPORT_ENDPOINT}`;
+  console.log(`[Safepay] POST ${tokenUrl} (passport)`);
+
+  let userToken;
+  try {
+    const tokenRes = await fetch(tokenUrl, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        merchant_api_key: publicKey,
+      }),
+    });
+
+    const tokenText = await tokenRes.text();
+    let tokenData;
+    try {
+      tokenData = JSON.parse(tokenText);
+    } catch {
+      tokenData = { _raw: tokenText };
+    }
+
+    if (!tokenRes.ok) {
+      console.error(
+        `[Safepay] Passport call FAILED — status: ${tokenRes.status}, ` +
+          `mode: ${SF_MODE}, body: ${tokenText.slice(0, 500)}`
+      );
+      throw new ApiError(
+        502,
+        `Safepay passport call failed (${tokenRes.status}): ${tokenText.slice(0, 500)}`
+      );
+    }
+
+    // The passport response shape (per the WooCommerce plugin):
+    //   { data: "<userToken-string>", ... }
+    // The plugin reads: $userToken = $userToken['data']
+    userToken = tokenData?.data;
+    if (!userToken || typeof userToken !== "string") {
+      console.error(
+        `[Safepay] No userToken in passport response — keys: ${Object.keys(tokenData || {}).join(", ")}, ` +
+          `raw: ${tokenText.slice(0, 500)}`
+      );
+      throw new ApiError(
+        502,
+        `Safepay passport returned no user token. Response: ${tokenText.slice(0, 500)}`
+      );
+    }
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    console.error(
+      `[Safepay] Network error reaching passport endpoint: ${err.message}`
+    );
+    throw new ApiError(
+      502,
+      `Could not reach Safepay passport endpoint (${tokenUrl}). ${err.message}`
+    );
+  }
+
+  // ----- Step 2: create the tracker (session) -----
+  // Same body shape as the SDK's `safepay.payments.session.setup({...})`
+  // example on the Safepay homepage. Amount in PAISA.
+  //
+  // We also send `source: "hosted"` in the body (per the WooCommerce
+  // plugin's `prepareApiArguments`), and we use the same value in
+  // the redirect URL below so they match.
+  const amountInPaisa = Math.round(Number(amount) * 100);
+  const requestBody = {
+    merchant_api_key: publicKey,
+    intent: "CYBERSOURCE",
+    mode: "payment",
+    currency: "PKR",
+    amount: amountInPaisa,
+    source: "hosted",
+  };
+
+  const checkoutUrl = `${SF_API}${SF_CHECKOUT_ENDPOINT}`;
   console.log(
-    `[Safepay] POST ${requestUrl} (mode=${SF_MODE}, orderId=${orderId}, amount=${amountInPaisa} paisa = Rs. ${amount})`
+    `[Safepay] POST ${checkoutUrl} (session, orderId=${orderId}, amount=${amountInPaisa} paisa = Rs. ${amount})`
   );
 
-  let safepayRes;
+  let tracker;
   try {
-    safepayRes = await fetch(requestUrl, {
+    const sessionRes = await fetch(checkoutUrl, {
       method: "POST",
-      headers: {
-        // CRITICAL: this header name is `x-sfpy-merchant-secret`,
-        // NOT `Authorization: Bearer ...`. The latter is the
-        // OAuth2 / Stripe / PayPal pattern; Safepay uses a
-        // custom header.
-        "x-sfpy-merchant-secret": secretKey,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: authHeaders,
       body: JSON.stringify(requestBody),
     });
-  } catch (networkErr) {
+
+    const sessionText = await sessionRes.text();
+    let sessionData;
+    try {
+      sessionData = JSON.parse(sessionText);
+    } catch {
+      sessionData = { _raw: sessionText };
+    }
+
+    if (!sessionRes.ok) {
+      console.error(
+        `[Safepay] Session creation FAILED — status: ${sessionRes.status}, ` +
+          `mode: ${SF_MODE}, request: ${JSON.stringify(requestBody)}, ` +
+          `response: ${sessionText.slice(0, 500)}`
+      );
+      throw new ApiError(
+        502,
+        `Safepay session creation failed (${sessionRes.status}): ${sessionText.slice(0, 500)}`
+      );
+    }
+
+    // Response shape (matches the @sfpy/node-core SDK homepage example):
+    //   { data: { tracker: { token: "track_..." } } }
+    tracker =
+      sessionData?.data?.tracker?.token ||
+      sessionData?.tracker?.token ||
+      sessionData?.data?.token ||
+      sessionData?.token;
+    if (!tracker) {
+      console.error(
+        `[Safepay] No tracker in session response — keys: ${Object.keys(sessionData || {}).join(", ")}, ` +
+          `raw: ${sessionText.slice(0, 500)}`
+      );
+      throw new ApiError(
+        502,
+        `Safepay session returned no tracker. Response: ${sessionText.slice(0, 500)}`
+      );
+    }
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
     console.error(
-      `[Safepay] Network error — could not reach ${requestUrl}. ${networkErr.message}`
+      `[Safepay] Network error reaching checkout endpoint: ${err.message}`
     );
     throw new ApiError(
       502,
-      `Could not reach Safepay at ${requestUrl}. ${networkErr.message}. ` +
-        `If the host is wrong, fix SF_MODE (currently "${SF_MODE}").`
+      `Could not reach Safepay checkout endpoint (${checkoutUrl}). ${err.message}`
     );
   }
 
-  // ----- Parse the response -----
-  // Safepay returns JSON in the success case. We log the raw
-  // response (first 500 chars) on failure so you can see
-  // exactly what went wrong — the most common issues are:
-  //   - Wrong header name (Bearer instead of x-sfpy-merchant-secret)
-  //   - Wrong field name in the body
-  //   - Wrong intent value
-  //   - Auth failure (401)
-  const responseText = await safepayRes.text();
-  let responseData;
-  try {
-    responseData = JSON.parse(responseText);
-  } catch {
-    responseData = { _raw: responseText };
-  }
-
-  if (!safepayRes.ok) {
-    console.error(
-      `[Safepay] Checkout creation FAILED — status: ${safepayRes.status}, mode: ${SF_MODE}, ` +
-        `request: ${JSON.stringify(requestBody)}, response: ${responseText.slice(0, 500)}`
-    );
-    throw new ApiError(
-      502,
-      `Safepay checkout creation failed (${safepayRes.status}): ${responseText.slice(0, 500)}`
-    );
-  }
-
-  // ----- Extract the checkout token -----
-  // Based on the @sfpy/node-core SDK homepage example:
-  //   safepay.payments.session.setup({...})
-  //     .then(payment => console.log(payment.tracker.token))
+  // ----- Step 3: build the redirect URL (OFFICIAL Safepay pattern) -----
+  // The hosted-checkout URL pattern below is copied character-for-
+  // character from Safepay's own open-source WooCommerce plugin
+  // (function `prepareRedirectUrl` in SafepayPaymentGateway.php).
+  // Verified URL:
+  //   https://github.com/getsafepay/safepay-checkout-woocommerce
   //
-  // The response shape varies by version, so we accept a few:
-  //   - { data: { tracker: { token: "..." } } }   (newer SDK)
-  //   - { tracker: { token: "..." } }             (direct response)
-  //   - { data: { token: "..." } }                  (alt format)
-  //   - { token: "..." }                            (simplest)
-  const token =
-    responseData?.data?.tracker?.token ||
-    responseData?.tracker?.token ||
-    responseData?.data?.token ||
-    responseData?.token;
-
-  if (!token) {
-    console.error(
-      `[Safepay] No checkout token in response — keys: ${Object.keys(responseData || {}).join(", ")}, ` +
-        `raw: ${responseText.slice(0, 500)}`
-    );
-    throw new ApiError(
-      502,
-      `Safepay returned no checkout token. Response: ${responseText.slice(0, 500)}`
-    );
-  }
-
-  // ----- Construct the redirect URL -----
-  // The hosted-checkout URL pattern. We use
-  // `${SF_API}/embedded/external/?...` with as many session
-  // details in the URL as we can — the hosted page is a SPA
-  // that, when missing required params, loads its shell but
-  // can't render the checkout UI (the page is blank, with no
-  // visible error). Putting the details in the URL means the
-  // SPA can render immediately without an extra API round-trip.
+  //   sprintf(
+  //     '%s/embedded/?tbt=%s&tracker=%s&order_id=%s&environment=%s
+  //      &source=woocommerce&redirect_url=%s&cancel_url=%s',
+  //     ...
+  //   );
   //
-  // Params we include (and why):
-  //   - tracker      = the session token (the only TRUE identifier
-  //                   — all other params are metadata that the
-  //                   page can show in the checkout UI)
-  //   - environment  = sandbox / production
-  //   - merchant     = the PUBLIC key (sec_...) so the page
-  //                   knows which merchant this checkout belongs to
-  //   - success_url  = where Safepay redirects after payment
-  //   - cancel_url   = where Safepay redirects after cancel
-  //   - amount       = the total in PAISA (e.g. 6000 for Rs. 6000)
-  //   - currency     = "PKR"
-  //   - customer[email] / customer[phone] = pre-fill the form
-  //   - intent       = "CYBERSOURCE" (from the SDK example)
-  //   - mode         = "payment" (one-time, not subscription)
+  // We use `source=hosted` (instead of `woocommerce`) because this
+  // is a direct hosted integration, not a WooCommerce plugin.
+  // `order_id` is our MongoDB ObjectId so the success page can
+  // look up the order.
   //
-  // The path is `/embedded/external/` (NOT `/embedded/`). The
-  // SDK's Checkout.js uses `/embedded/` for the EMBEDDED flow
-  // (iframe in your page); the EXTERNAL flow (full-page redirect,
-  // which is what we want) uses `/embedded/external/`. This was
-  // confirmed by the error page URL Safepay shows when something
-  // is wrong: `/embedded/external/error?error=Session%20expired!`
-  // — the `/embedded/external/` segment is the checkout path.
+  // The path is `/embedded/` (NOT `/embedded/external/`) — the
+  // official hosted-checkout path. The `/embedded/external/` path
+  // is the error page (Safepay redirects there when something
+  // goes wrong).
+  //
+  // CRITICAL: `success_url` is the WRONG param name. The correct
+  // one is `redirect_url` (this is what tripped us up before).
+  // The `tbt` param is also REQUIRED — without it, the SPA
+  // loads but cannot render the checkout UI (page is blank).
   const baseUrl = process.env.SF_BASE_URL || "http://localhost:5173";
-  // amountInPaisa was already computed above (line ~110) for the
-  // request body, so we reuse it here for the redirect URL.
-  const redirectUrl =
-    `${SF_API}/embedded/external/` +
-    `?tracker=${encodeURIComponent(token)}` +
-    `&environment=${SF_MODE}` +
-    `&merchant=${encodeURIComponent(publicKey)}` +
-    `&amount=${amountInPaisa}` +
-    `&currency=PKR` +
-    `&intent=CYBERSOURCE` +
-    `&mode=payment` +
-    `&success_url=${encodeURIComponent(`${baseUrl}/payment/safepay/success`)}` +
-    `&cancel_url=${encodeURIComponent(`${baseUrl}/payment/safepay/failure`)}` +
-    `&customer[email]=${encodeURIComponent(email)}` +
-    `&customer[phone]=${encodeURIComponent(phone)}`;
+  const params = new URLSearchParams({
+    tbt: userToken,
+    tracker,
+    order_id: orderId,
+    environment: SF_MODE,
+    source: "hosted",
+    redirect_url: `${baseUrl}/payment/safepay/success?tracker=${encodeURIComponent(tracker)}`,
+    cancel_url: `${baseUrl}/payment/safepay/cancel?tracker=${encodeURIComponent(tracker)}`,
+  });
+  const redirectUrl = `${SF_API}/embedded/?${params.toString()}`;
 
   console.log(
-    `[Safepay] Checkout created (mode=${SF_MODE}, token=${token.slice(0, 12)}..., orderId=${orderId})`
+    `[Safepay] Checkout created (mode=${SF_MODE}, tracker=${tracker.slice(0, 12)}..., orderId=${orderId}, tbt=${userToken.slice(0, 12)}...)`
   );
   console.log(`[Safepay] Redirect URL: ${redirectUrl}`);
 
   return res.status(200).json(
-    new ApiResponse(200, { redirectUrl, token }, "Safepay checkout created")
+    new ApiResponse(200, { redirectUrl, tracker }, "Safepay checkout created")
   );
 });
