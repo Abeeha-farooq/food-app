@@ -24,7 +24,7 @@ const HereSection = () => {
         />
         <div className="absolute inset-0 bg-black bg-opacity-60 z-10" />
 
-        <div className="relative z-20 flex flex-col items-center justify-center text-white h-full text-center px-4">
+        <div className="relative flex flex-col items-center justify-center text-white h-full text-center px-4">
           <h1 className="text-3xl sm:text-4xl md:text-6xl font-bold mb-4 leading-tight">
             Order food anywhere & anytime
           </h1>

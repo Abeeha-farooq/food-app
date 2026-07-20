@@ -3,7 +3,6 @@
 // Purpose: Edit profile form. Loads existing data, saves updates.
 // ===============================
 
-import { Avatar, AvatarFallback, AvatarImage } from "@radix-ui/react-avatar";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Loader2, Mail, MapPin, MapPinnedIcon, Plus, Save } from "lucide-react";
@@ -133,14 +132,38 @@ const Profile = () => {
             fallback "AB" text sat off-center inside it.
             We use `md:size-28` (Tailwind's `size-` utility = w + h in one)
             to guarantee a square on every breakpoint. `shrink-0` keeps
-            the avatar from being compressed by the flex row. */}
-        <div className="relative w-20 h-20 md:size-28 shrink-0 bg-gray-300 rounded-full flex items-center justify-center">
-          <Avatar className="w-full h-full">
-            <AvatarImage src={selectedProfilePicture} className="w-full h-full object-cover rounded-full" />
-            <AvatarFallback>
+            the avatar from being compressed by the flex row.
+
+            Why a plain div instead of the shared <Avatar> component:
+              <Avatar> is a Radix wrapper with hard-coded `h-10 w-10`
+              defaults. When we passed `w-full h-full` to make it fill
+              this 112×112 parent, the `h-10` defaults won (Tailwind's
+              class-order resolution + the cn() merge didn't override
+              them cleanly), leaving the Avatar at 40×40 and the
+              "AB" fallback rendering outside the visible circle.
+              For a one-off large avatar, a plain div with conditional
+              content is simpler and avoids the trap entirely. */}
+        <div className="relative w-20 h-20 md:size-28 shrink-0 rounded-full overflow-hidden bg-gray-300">
+          {selectedProfilePicture ? (
+            // User has a profile picture — fill the circle with it.
+            // `absolute inset-0` + `object-cover` mirrors what
+            // <AvatarImage> did, but without the size-default conflict.
+            <img
+              src={selectedProfilePicture}
+              alt="Profile"
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+          ) : (
+            // No picture — show the user's initials, centered in the
+            // circle. `absolute inset-0` on the wrapper + flex centering
+            // guarantees the text lands in the middle regardless of
+            // any surrounding layout. `select-none` prevents the
+            // initials from being highlighted if the user accidentally
+            // double-clicks the circle.
+            <div className="absolute inset-0 flex items-center justify-center text-gray-700 font-semibold text-2xl md:text-3xl select-none">
               {profileData.fullname ? profileData.fullname.substring(0, 2).toUpperCase() : "?"}
-            </AvatarFallback>
-          </Avatar>
+            </div>
+          )}
 
           <Input
             type="file"
@@ -150,6 +173,10 @@ const Profile = () => {
             onChange={fileChangeHandler}
           />
 
+          {/* Hover-to-upload overlay. Sits on top of the image / initials
+              (both are `absolute inset-0`, this comes later in DOM order
+              so it stacks on top). Shows a dark tint + "+" icon on hover
+              so the user knows the circle is clickable. */}
           <div
             onClick={() => imageRef.current?.click()}
             className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity duration-300 bg-black bg-opacity-50 rounded-full cursor-pointer"
