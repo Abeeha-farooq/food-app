@@ -77,9 +77,9 @@ import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 
 // The five payment methods. "card" and "wallet" both use Stripe;
 // "paypal" uses PayPal Smart Buttons; "cash" is pay-on-delivery;
-// "rapidGateway" uses RapidPAY / Rapid Gateway hosted checkout
-// (full-page redirect to the gateway's own checkout page).
-type PaymentMethod = "cash" | "card" | "wallet" | "paypal" | "rapidGateway";
+// "safepay" uses Safepay hosted checkout (full-page redirect to
+// the gateway's own checkout page).
+type PaymentMethod = "cash" | "card" | "wallet" | "paypal" | "safepay";
 
 // Shape of the order returned by POST /api/orders.
 interface PlacedOrder {
@@ -210,12 +210,12 @@ const CheckoutPage = () => {
       return;
     }
 
-    if (paymentMethod === "rapidGateway") {
-      // Rapid Gateway — place the order first (with paymentStatus:
+    if (paymentMethod === "safepay") {
+      // Safepay — place the order first (with paymentStatus:
       // "pending"), then call the server to get the gateway's
       // redirect URL, then send the browser there. See
-      // handleRapidGatewayCheckout below for the full flow.
-      await handleRapidGatewayCheckout();
+      // handleSafepayCheckout below for the full flow.
+      await handleSafepayCheckout();
       return;
     }
 
@@ -355,30 +355,30 @@ const CheckoutPage = () => {
     }
   };
 
-  // ----- Handler: Rapid Gateway checkout flow -----
-  // The RapidPAY / Rapid Gateway flow is different from Stripe/PayPal:
-  // the user is redirected to the gateway's own hosted checkout page,
-  // NOT an iframe or popup. This means:
+  // ----- Handler: Safepay checkout flow -----
+  // The Safepay flow is different from Stripe/PayPal: the user is
+  // redirected to the gateway's own hosted checkout page, NOT an
+  // iframe or popup. This means:
   //   1. Place the order FIRST (with paymentStatus: "pending" — the
   //      gateway handles payment separately on its own page).
   //   2. Get a fresh order ID from the server response.
-  //   3. Call the server's rapid-gateway endpoint to get the
-  //      gateway's redirect URL (the server does the OAuth token
-  //      dance and submits the transaction).
+  //   3. Call the server's safepay endpoint to get the
+  //      gateway's redirect URL (the server does the API call
+  //      with our secret key and returns the checkout token URL).
   //   4. window.location.href = redirectUrl — the browser navigates
   //      to the gateway, the user pays, and the gateway redirects
-  //      them back to /payment/rapid-gateway/success or /failure.
+  //      them back to /payment/safepay/success or /failure.
   //
   // We intentionally DON'T use the existing placeOrder() helper
   // because that helper transitions to the "confirmed" phase —
-  // for Rapid Gateway we want to redirect, not show a confirmation
+  // for Safepay we want to redirect, not show a confirmation
   // screen. (The gateway's success page is the confirmation.)
-  const handleRapidGatewayCheckout = async () => {
+  const handleSafepayCheckout = async () => {
     setPhase("submitting");
     try {
       // Step 1: place the order with paymentStatus="pending".
-      // The server will accept this because "rapidGateway" is now
-      // a recognized paymentMethod that doesn't trigger the
+      // The server will accept this because "safepay" is a
+      // recognized paymentMethod that doesn't trigger the
       // Stripe/PayPal verification path (those paths only fire
       // when the client claims paymentStatus="paid").
       const restaurantId = items[0]?.restaurantId;
@@ -390,7 +390,7 @@ const CheckoutPage = () => {
         })),
         deliveryAddress: deliveryAddress.trim(),
         paymentStatus: "pending",
-        paymentMethod: "rapidGateway",
+        paymentMethod: "safepay",
         // Coupon — the server re-validates atomically (same as
         // the other payment methods).
         couponCode: appliedCoupon ? appliedCoupon.code : undefined,
@@ -402,8 +402,9 @@ const CheckoutPage = () => {
       clearCart();
 
       // Step 3: call the server to get the gateway's redirect URL.
-      // The server does the OAuth2 token dance + transaction submit.
-      const checkoutRes = await api.post("/payments/rapid-gateway/checkout", {
+      // The server does the API call with our secret key and
+      // returns the hosted-checkout URL.
+      const checkoutRes = await api.post("/payments/safepay/checkout", {
         amount: grandTotal,
         phone: user?.contact || "",
         email: user?.email || "",
@@ -411,11 +412,11 @@ const CheckoutPage = () => {
       });
 
       // Step 4: send the browser to the gateway. The gateway will
-      // collect payment and redirect back to /payment/rapid-gateway/
+      // collect payment and redirect back to /payment/safepay/
       // success or /failure.
       const { redirectUrl } = checkoutRes.data.data;
       if (!redirectUrl) {
-        throw new Error("Rapid Gateway did not return a redirect URL");
+        throw new Error("Safepay did not return a redirect URL");
       }
       window.location.href = redirectUrl;
     } catch (err) {
@@ -599,17 +600,18 @@ const CheckoutPage = () => {
                   disabled={phase !== "form"}
                 />
                 <PaymentOption
-                  // RapidPAY / Rapid Gateway — full-page redirect to the
-                  // gateway's own hosted checkout. The user completes
-                  // payment on the gateway's site, then is redirected
-                  // back to /payment/rapid-gateway/success or /failure.
-                  // The order is placed FIRST (with paymentStatus:
-                  // "pending") — the gateway handles payment separately.
+                  // Safepay — full-page redirect to the gateway's
+                  // own hosted checkout. The user completes payment
+                  // on Safepay's site, then is redirected back to
+                  // /payment/safepay/success or /failure. The
+                  // order is placed FIRST (with paymentStatus:
+                  // "pending") — the gateway handles payment
+                  // separately.
                   icon={<Landmark className="w-6 h-6 text-emerald-600" />}
-                  label="Rapid Gateway"
-                  description="Pay via RapidPAY hosted checkout"
-                  selected={paymentMethod === "rapidGateway"}
-                  onSelect={() => setPaymentMethod("rapidGateway")}
+                  label="Safepay"
+                  description="Pay via Safepay hosted checkout"
+                  selected={paymentMethod === "safepay"}
+                  onSelect={() => setPaymentMethod("safepay")}
                   disabled={phase !== "form"}
                 />
               </div>
@@ -932,8 +934,8 @@ const CheckoutPage = () => {
                 >
                   {paymentMethod === "cash"
                     ? "Place order"
-                    : paymentMethod === "rapidGateway"
-                    ? "Pay with Rapid Gateway"
+                    : paymentMethod === "safepay"
+                    ? "Pay with Safepay"
                     : "Continue to payment"}
                   <ArrowRight className="ml-2 w-4 h-4" />
                 </Button>

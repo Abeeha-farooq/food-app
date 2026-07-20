@@ -195,24 +195,25 @@ const orderSchema = new mongoose.Schema(
     //
     //   - "stripe" → stripePaymentIntentId is set
     //   - "paypal" → paypalOrderId + paypalCaptureId are set
-    //   - "cash"          → none of the above (order paid on delivery)
-    //   - "rapidGateway"  → RapidPAY / Rapid Gateway hosted checkout
+    //   - "cash"     → none of the above (order paid on delivery)
+    //   - "safepay"  → Safepay hosted checkout (full-page redirect)
     paymentMethod: {
       type: String,
-      enum: ["stripe", "paypal", "cash", "rapidGateway"],
+      enum: ["stripe", "paypal", "cash", "safepay"],
       default: "cash",
     },
 
-    // ----- Rapid Gateway payment linkage -----
-    // BASKET_ID we sent to the gateway is the order's own _id
-    // (set in the checkout request), so we don't need a separate
-    // "basket id" field — the order _id IS the basket id.
+    // ----- Safepay payment linkage -----
+    // The order's own _id is sent to Safepay as the `order_id`
+    // (which Safepay uses to identify the order on the redirect
+    // back), so we don't need a separate "basket id" field.
     //
-    // rapidGatewayTransactionId is the gateway's transaction
-    // reference returned after payment completes. It's set by
-    // the webhook (or the success-page callback if there's no
-    // webhook). We index it so refunds / lookups by txid are fast.
-    rapidGatewayTransactionId: {
+    // safepayTransactionId is the gateway's transaction reference
+    // (Safepay calls it the "tracker") returned after payment
+    // completes. It's set by the webhook (or the success-page
+    // callback if there's no webhook). We index it so refunds /
+    // lookups by txid are fast.
+    safepayTransactionId: {
       type: String,
       default: "",
       index: true,

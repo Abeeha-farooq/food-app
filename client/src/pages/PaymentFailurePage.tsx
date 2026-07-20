@@ -1,8 +1,8 @@
 // src/pages/PaymentFailurePage.tsx
 // ===============================
-// Purpose: The redirect target after a FAILED Rapid Gateway
+// Purpose: The redirect target after a FAILED Safepay
 //          payment. The gateway sends the customer here with
-//          ?basketId=<orderId> in the URL.
+//          ?tracker=<orderId> in the URL.
 //
 // What this page does:
 //   1. Reads the basketId (order ID) from the URL
@@ -24,10 +24,11 @@ import { Button } from "@/components/ui/button";
 import { XCircle, Home, RefreshCw, ShoppingCart, ArrowLeft } from "lucide-react";
 
 const PaymentFailurePage = () => {
-  // Read ?basketId=<orderId> from the URL. The gateway appends this
-  // so we can reference the specific order that failed.
+  // Read ?tracker=<orderId> from the URL. Safepay calls this
+  // parameter the "tracker" and uses it to identify the order
+  // that failed.
   const [searchParams] = useSearchParams();
-  const basketId = searchParams.get("basketId") || "";
+  const tracker = searchParams.get("tracker") || searchParams.get("orderId") || "";
 
   // Slight visual delay before the failure animation settles.
   const [ready, setReady] = useState(false);
@@ -55,12 +56,12 @@ const PaymentFailurePage = () => {
               Payment failed
             </h1>
             <p className="text-gray-600">
-              We weren't able to process your payment with Rapid Gateway.
-              {basketId && (
+              We weren't able to process your payment with Safepay.
+              {tracker && (
                 <>
                   {" "}Order{" "}
                   <span className="font-mono font-semibold">
-                    #{basketId.slice(-8)}
+                    #{tracker.slice(-8)}
                   </span>{" "}
                   is still pending.
                 </>

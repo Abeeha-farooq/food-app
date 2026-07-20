@@ -74,8 +74,8 @@ const appRouter = createBrowserRouter([
   // authenticator (it knows which basket/order it was processing).
   // The basketId query param is the order ID we sent to the
   // gateway, so we can link the customer to their specific order.
-  { path: "/payment/rapid-gateway/success", element: <PaymentSuccessPage /> },
-  { path: "/payment/rapid-gateway/failure", element: <PaymentFailurePage /> },
+  { path: "/payment/safepay/success", element: <PaymentSuccessPage /> },
+  { path: "/payment/safepay/failure", element: <PaymentFailurePage /> },
   // ============================================================
   // ADMIN ROUTES — all nested under <AdminLayout> for the shared
   // sidebar + top bar. RoleGuard ensures only admins can reach them.

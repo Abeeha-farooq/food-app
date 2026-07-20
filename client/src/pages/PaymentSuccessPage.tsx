@@ -1,8 +1,8 @@
 // src/pages/PaymentSuccessPage.tsx
 // ===============================
-// Purpose: The redirect target after a successful Rapid Gateway
+// Purpose: The redirect target after a successful Safepay
 //          payment. The gateway sends the customer here with
-//          ?basketId=<orderId> in the URL.
+//          ?tracker=<orderId> in the URL.
 //
 // What this page does:
 //   1. Reads the basketId (order ID) from the URL
@@ -27,10 +27,10 @@ import { Button } from "@/components/ui/button";
 import { CheckCircle2, Home, Receipt, ArrowRight } from "lucide-react";
 
 const PaymentSuccessPage = () => {
-  // Read ?basketId=<orderId> from the URL. The gateway appends this
-  // so we can link the user to their specific order.
+  // Read ?tracker=<orderId> from the URL. Safepay calls this
+  // parameter the "tracker" and uses it to identify the order.
   const [searchParams] = useSearchParams();
-  const basketId = searchParams.get("basketId") || "";
+  const tracker = searchParams.get("tracker") || searchParams.get("orderId") || "";
 
   // Slight visual delay before the success animation settles —
   // gives the user a moment to register the page change.
@@ -60,12 +60,12 @@ const PaymentSuccessPage = () => {
             </h1>
             <p className="text-gray-600">
               Your order has been received and your payment was processed
-              by Rapid Gateway.
-              {basketId && (
+              by Safepay.
+              {tracker && (
                 <>
                   {" "}Order{" "}
                   <span className="font-mono font-semibold">
-                    #{basketId.slice(-8)}
+                    #{tracker.slice(-8)}
                   </span>
                   .
                 </>
