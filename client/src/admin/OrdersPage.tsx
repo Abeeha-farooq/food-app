@@ -265,8 +265,38 @@ const OrdersPage = () => {
         );
       });
     }
+
+    // ----- Sort: pending-acceptance orders first, then by createdAt DESC -----
+    // Admin's "action queue" is `placed` orders (they need to be accepted
+    // or rejected). Surfacing them at the top of the table means the admin
+    // sees what needs their attention immediately, without scrolling
+    // past hundreds of in-progress or delivered orders.
+    //
+    // Within each group (placed vs not-placed), newest first — matches
+    // the server's default sort and keeps the action queue ordered
+    // by recency (oldest pending last in the list).
+    //
+    // Note: this sort only runs on the admin view. The customer view
+    // has no "action queue" so the natural newest-first order is
+    // fine as-is.
+    if (isAdmin) {
+      const PLACED = "placed";
+      result = [...result].sort((a, b) => {
+        // Both placed → newer first
+        if (a.status === PLACED && b.status === PLACED) {
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        }
+        // Only a is placed → a comes first
+        if (a.status === PLACED) return -1;
+        // Only b is placed → b comes first
+        if (b.status === PLACED) return 1;
+        // Neither is placed → newer first (preserve server order)
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+    }
+
     return result;
-  }, [orders, statusFilter, searchQuery]);
+  }, [orders, statusFilter, searchQuery, isAdmin]);
 
   return (
     <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">

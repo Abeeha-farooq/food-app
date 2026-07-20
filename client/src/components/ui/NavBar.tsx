@@ -194,7 +194,15 @@ const NavBar = () => {
                         </Link>
                     )}
 
-                    {/* LOGIN or LOGOUT, depending on auth state */}
+                    {/* LOGIN or LOGOUT, depending on auth state.
+                        Logged-out users see a Login button. Logged-in
+                        users see a Logout button (with a spinner while
+                        the API call is in flight). The profile avatar
+                        lives BELOW this block — only for logged-in
+                        users. Previously a "?" was shown for guests
+                        (the AvatarFallback default), which looked
+                        broken, so we now only render the avatar when
+                        there's a real user behind it. */}
                     {isAuthenticated ? (
                         loading ? (
                             <Button disabled className="bg-orange hover:bg-hoverOrange">
@@ -217,13 +225,31 @@ const NavBar = () => {
                         </Link>
                     )}
 
-                    {/* Avatar (always shown, even for guests) */}
-                    <Avatar>
-                        <AvatarImage src={user?.profilePicture || ""} />
-                        <AvatarFallback>
-                            {user?.fullname ? user.fullname.substring(0, 2).toUpperCase() : "?"}
-                        </AvatarFallback>
-                    </Avatar>
+                    {/* Profile avatar — ONLY for logged-in users.
+                        Wrapped in a Link to /profile so the avatar
+                        itself is clickable (in addition to the
+                        "Profile" link in the nav). Falls back to a
+                        generic user icon when:
+                          - no profile picture is set
+                          - AND no fullname is set
+                        so the avatar never shows the broken "?" char. */}
+                    {isAuthenticated && user && (
+                        <Link
+                            to="/profile"
+                            aria-label="Open profile"
+                            title={user.fullname || "Profile"}
+                            className="rounded-full focus:outline-none focus:ring-2 focus:ring-orange-400"
+                        >
+                            <Avatar>
+                                <AvatarImage src={user.profilePicture || ""} />
+                                <AvatarFallback>
+                                    {user.fullname
+                                        ? user.fullname.substring(0, 2).toUpperCase()
+                                        : <User className="w-4 h-4" />}
+                                </AvatarFallback>
+                            </Avatar>
+                        </Link>
+                    )}
                 </div>
 
                 {/* ============ MOBILE NAV (hidden on desktop) ============ */}
@@ -322,19 +348,26 @@ const MobileNavbar = ({
                     )}
                 </div>
 
-                {/* Footer: avatar + name + theme toggle + login/logout button */}
+                {/* Footer: avatar + name + theme toggle + login/logout button.
+                    Same gating rule as the desktop nav: the avatar is
+                    ONLY shown for logged-in users. Guests see the
+                    login button below with no broken "?" fallback. */}
                 <div className="flex flex-col w-full gap-5 mt-6">
-                    <div className="flex flex-row items-center gap-2">
-                        <Avatar>
-                            <AvatarImage src={user?.profilePicture || ""} />
-                            <AvatarFallback>
-                                {user?.fullname ? user.fullname.substring(0, 2).toUpperCase() : "?"}
-                            </AvatarFallback>
-                        </Avatar>
-                        <h1 className="text-xl font-bold">
-                            {user?.fullname || (isAuthenticated ? "Loading..." : "Guest")}
-                        </h1>
-                    </div>
+                    {isAuthenticated && user && (
+                        <div className="flex flex-row items-center gap-2">
+                            <Avatar>
+                                <AvatarImage src={user.profilePicture || ""} />
+                                <AvatarFallback>
+                                    {user.fullname
+                                        ? user.fullname.substring(0, 2).toUpperCase()
+                                        : <User className="w-4 h-4" />}
+                                </AvatarFallback>
+                            </Avatar>
+                            <h1 className="text-xl font-bold">
+                                {user.fullname || "Profile"}
+                            </h1>
+                        </div>
+                    )}
 
                     {/* Theme toggle on mobile too — same component, same
                         persistence. Just rendered inline instead of in a
