@@ -34,6 +34,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { Search, Loader2, Store, UtensilsCrossed, X, MapPin } from "lucide-react";
 import { Input } from "./input";
@@ -169,6 +170,22 @@ export const SearchBar = ({
   // and to decide which suggestion Enter selects.
   const [activeIndex, setActiveIndex] = useState<number>(-1);
 
+  // ----- Dropdown position (for the portal) -----
+  // We render the dropdown as a React portal attached to
+  // document.body, so it escapes any parent stacking context
+  // (the hero's `z-20` content, the search page's sticky
+  // toolbar, etc.). The portal needs an EXPLICIT position
+  // because it has no DOM ancestry to position itself against.
+  // We compute that position from the input's bounding rect
+  // and update it on scroll / resize.
+  //
+  // `null` = position not yet computed (first render after
+  // the dropdown opens). We gate the portal on this so the
+  // dropdown doesn't flash at (0, 0).
+  const [dropdownPos, setDropdownPos] = useState<
+    { top: number; left: number; width: number } | null
+  >(null);
+
   // ----- Refs -----
   // The debounce timer. We hold it in a ref (not state) so
   // changing it doesn't trigger a re-render, AND so the
@@ -185,6 +202,12 @@ export const SearchBar = ({
   // previous one finished. Without this, a slow request could
   // overwrite a newer response (race condition).
   const abortRef = useRef<AbortController | null>(null);
+  // Ref to the portaled dropdown div. The click-outside handler
+  // uses this to allow clicks INSIDE the dropdown (the dropdown
+  // is portaled to document.body, so it's NOT a descendant of
+  // containerRef — without this ref, the outside-click logic
+  // would close the dropdown the moment the user clicks a row).
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   // ============================================================
   // Debounced suggest fetch
@@ -277,18 +300,70 @@ export const SearchBar = ({
   }, [query]);
 
   // ============================================================
+  // Dropdown position tracking (for the portal)
+  // ============================================================
+  // The dropdown is portaled to document.body, so it has no
+  // DOM ancestor to position itself against. We compute its
+  // position from the input's bounding rect, then re-compute
+  // on every scroll and resize so it stays glued to the input
+  // while the user scrolls the page or rotates their phone.
+  //
+  // The 8-pixel `+ 8` offset is the visual "gap" between the
+  // input and the dropdown — it matches the `mt-2` (0.5rem =
+  // 8px) we used before the portal refactor.
+  const updateDropdownPos = useCallback(() => {
+    if (!inputRef.current) return;
+    const rect = inputRef.current.getBoundingClientRect();
+    setDropdownPos({
+      top: rect.bottom + 8,
+      left: rect.left,
+      width: rect.width,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      // Clear the position when the dropdown closes so it
+      // doesn't briefly appear at the old coords on next open.
+      setDropdownPos(null);
+      return;
+    }
+    // Compute the initial position synchronously so the
+    // dropdown opens at the right place on the very first
+    // frame (no flash at (0, 0)).
+    updateDropdownPos();
+    // `capture: true` so we catch scroll events on ANY
+    // ancestor, not just window. The hero doesn't currently
+    // scroll internally, but future layouts might.
+    window.addEventListener("scroll", updateDropdownPos, true);
+    window.addEventListener("resize", updateDropdownPos);
+    return () => {
+      window.removeEventListener("scroll", updateDropdownPos, true);
+      window.removeEventListener("resize", updateDropdownPos);
+    };
+  }, [open, updateDropdownPos]);
+
+  // ============================================================
   // Click-outside: close the dropdown
   // ============================================================
   // We attach a single window mousedown listener (not per-render
   // listener on every suggestion) and check whether the click
-  // landed inside containerRef. If not, close.
+  // landed inside EITHER:
+  //   - containerRef (the SearchBar wrapper) — clicks on the
+  //     input itself shouldn't close the dropdown
+  //   - dropdownRef (the portaled dropdown) — the dropdown is
+  //     attached to document.body, NOT a descendant of the
+  //     SearchBar, so without this second check the dropdown
+  //     would close the moment the user clicks a row.
   useEffect(() => {
     if (!open) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
+      const target = e.target as Node;
+      const insideContainer =
+        containerRef.current && containerRef.current.contains(target);
+      const insideDropdown =
+        dropdownRef.current && dropdownRef.current.contains(target);
+      if (!insideContainer && !insideDropdown) {
         setOpen(false);
         setActiveIndex(-1);
       }
@@ -503,67 +578,85 @@ export const SearchBar = ({
         )}
       </form>
 
-      {/* ============== DROPDOWN ============== */}
-      {/* Rendered as a sibling of the <form>, NOT inside it.
-          That way clicking a suggestion doesn't trigger the
-          form's submit (which would call handleSubmit and
-          navigate to /search/:query BEFORE our onClick
-          handler can run — both fire and the user lands on
-          the search page instead of the restaurant page). */}
-      {open && (
-        <div
-          id="searchbar-suggestions"
-          role="listbox"
-          className={cn(
-            "absolute left-0 right-0 mt-2 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden z-50",
-            // Hero variant: align with the input. Inline
-            // variant: span the wrapper's full width.
-            variant === "hero" && "left-2 right-2"
-          )}
-        >
-          {/* Loading state — show a small row with spinner
-              while the debounced request is in flight. We
-              show this only on the FIRST fetch (no
-              suggestions yet). On subsequent fetches, we
-              keep the old suggestions visible while the new
-              ones load — feels less jumpy. */}
-          {loading && suggestions.length === 0 && (
-            <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Searching…
-            </div>
-          )}
+      {/* ============== DROPDOWN (portaled) ============== */}
+      {/* Rendered via createPortal to document.body so the
+          dropdown escapes any parent stacking context. This
+          matters because:
+            - The hero content sits at z-20 (above the bg
+              overlay) — without the portal, the dropdown
+              would be trapped at z-20 and lose to the
+              feature cards at z-30.
+            - The search page's toolbar might use sticky
+              positioning in the future, which would create
+              its own stacking context trap.
+          The portal also keeps the dropdown from being clipped
+          by any parent's `overflow: hidden` — the HereSection
+          wrapper has `overflow-hidden` to prevent the negative
+          margin on the feature cards from leaking outside it.
 
-          {/* Empty state — query has content, no errors, but
-              the server returned 0 matches. */}
-          {!loading && suggestions.length === 0 && (
-            <div className="px-4 py-6 text-sm text-gray-500 text-center">
-              No matches for{" "}
-              <span className="font-semibold text-gray-700">
-                "{query.trim()}"
-              </span>
-            </div>
-          )}
+          We also wrap in a `dropdownPos` check: the portal
+          doesn't render until the position has been computed
+          from the input's bounding rect, so the dropdown
+          never flashes at (0, 0) on first open. */}
+      {open &&
+        dropdownPos &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            id="searchbar-suggestions"
+            role="listbox"
+            style={{
+              position: "fixed",
+              top: dropdownPos.top,
+              left: dropdownPos.left,
+              width: dropdownPos.width,
+            }}
+            className="bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden z-50"
+          >
+            {/* Loading state — show a small row with spinner
+                while the debounced request is in flight. We
+                show this only on the FIRST fetch (no
+                suggestions yet). On subsequent fetches, we
+                keep the old suggestions visible while the new
+                ones load — feels less jumpy. */}
+            {loading && suggestions.length === 0 && (
+              <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Searching…
+              </div>
+            )}
 
-          {/* Suggestion list — capped at MAX_DROPDOWN_ITEMS
-              on the client too, so a server change can't
-              blow up our layout. */}
-          {suggestions.length > 0 && (
-            <ul className="max-h-80 overflow-y-auto py-1">
-              {suggestions.slice(0, MAX_DROPDOWN_ITEMS).map((s, i) => (
-                <SuggestionRow
-                  key={suggestionKey(s)}
-                  suggestion={s}
-                  active={i === activeIndex}
-                  query={query}
-                  onSelect={() => handleSelect(s)}
-                  onHover={() => setActiveIndex(i)}
-                />
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+            {/* Empty state — query has content, no errors, but
+                the server returned 0 matches. */}
+            {!loading && suggestions.length === 0 && (
+              <div className="px-4 py-6 text-sm text-gray-500 text-center">
+                No matches for{" "}
+                <span className="font-semibold text-gray-700">
+                  "{query.trim()}"
+                </span>
+              </div>
+            )}
+
+            {/* Suggestion list — capped at MAX_DROPDOWN_ITEMS
+                on the client too, so a server change can't
+                blow up our layout. */}
+            {suggestions.length > 0 && (
+              <ul className="max-h-80 overflow-y-auto py-1">
+                {suggestions.slice(0, MAX_DROPDOWN_ITEMS).map((s, i) => (
+                  <SuggestionRow
+                    key={suggestionKey(s)}
+                    suggestion={s}
+                    active={i === activeIndex}
+                    query={query}
+                    onSelect={() => handleSelect(s)}
+                    onHover={() => setActiveIndex(i)}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };
