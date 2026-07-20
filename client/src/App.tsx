@@ -41,6 +41,8 @@ import CouponManagement from './admin/CouponManagement'
 // they can pop up from any page (e.g. the CartConflictModal
 // fires from any "Add to cart" button across the app).
 import { CartConflictModal } from './components/ui/CartConflictModal'
+import PaymentSuccessPage from './pages/PaymentSuccessPage'
+import PaymentFailurePage from './pages/PaymentFailurePage'
 
 const appRouter = createBrowserRouter([
   {
@@ -63,6 +65,17 @@ const appRouter = createBrowserRouter([
   { path: "/forgot-password", element: <ForgotPassword /> },
   { path: "/reset-password",  element: <ResetPassword /> },
   { path: "/verify-email",    element: <VerifyEmail /> },
+  // ============================================================
+  // PAYMENT REDIRECT TARGETS
+  // ============================================================
+  // The RapidPAY / Rapid Gateway hosted checkout redirects the
+  // customer back to one of these URLs after payment. Both are
+  // PUBLIC (no auth required) — the gateway itself is the
+  // authenticator (it knows which basket/order it was processing).
+  // The basketId query param is the order ID we sent to the
+  // gateway, so we can link the customer to their specific order.
+  { path: "/payment/rapid-gateway/success", element: <PaymentSuccessPage /> },
+  { path: "/payment/rapid-gateway/failure", element: <PaymentFailurePage /> },
   // ============================================================
   // ADMIN ROUTES — all nested under <AdminLayout> for the shared
   // sidebar + top bar. RoleGuard ensures only admins can reach them.

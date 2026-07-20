@@ -12,10 +12,14 @@
 //     POST /api/payments/paypal/capture           →  capture a PayPal order after approval
 //     POST /api/payments/paypal/webhook           →  PayPal webhook receiver (raw body, public)
 //
+//   Rapid Gateway (RapidPAY):
+//     POST /api/payments/rapid-gateway/checkout   →  create a hosted-checkout session,
+//                                                    return the gateway's redirect URL
+//
 // Mounting notes:
-//   - create-intent / create-order require login (we tag with userId).
+//   - create-intent / create-order / rapid-gateway require login (we tag with userId).
 //   - webhooks are PUBLIC (the processor calls them) and need the RAW
-//     request body for signature verification. Both webhook routes are
+//     request body for signature verification. Webhook routes are
 //     mounted in server.js BEFORE the json() middleware.
 // ===============================
 
@@ -30,6 +34,7 @@ import {
   capturePayPalOrder,
   handlePayPalWebhook,
 } from "../controllers/paypal.controller.js";
+import { createRapidGatewayCheckout } from "../controllers/rapidGateway.controller.js";
 import { verifyJWT, requireRole } from "../middlewares/auth.middleware.js";
 import ApiResponse from "../utils/apiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -76,5 +81,17 @@ router.post("/paypal/capture", verifyJWT, capturePayPalOrder);
 // PayPal webhook. Mounted separately in server.js with express.raw()
 // because PayPal's signature verification also reads the raw body.
 router.post("/paypal/webhook", handlePayPalWebhook);
+
+// ============================================================
+// RAPID GATEWAY
+// ============================================================
+
+// Create a Rapid Gateway hosted-checkout session. Called from the
+// client AFTER the order has been placed (with paymentStatus: "pending").
+// Returns the gateway's redirect URL — the client does
+// `window.location.href = redirectUrl` to send the customer to the
+// gateway's own checkout page. After payment, the gateway redirects
+// the customer to /payment/rapid-gateway/success or /failure.
+router.post("/rapid-gateway/checkout", verifyJWT, createRapidGatewayCheckout);
 
 export default router;

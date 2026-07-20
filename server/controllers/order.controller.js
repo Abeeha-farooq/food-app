@@ -21,11 +21,12 @@ export const placeOrder = asyncHandler(async (req, res) => {
     items,
     deliveryAddress,
     paymentStatus,
-    paymentMethod,           // "stripe" | "paypal" | "cash" — tells us which processor to verify with
+    paymentMethod,           // "stripe" | "paypal" | "cash" | "rapidGateway"
     stripePaymentIntentId,   // set when paymentMethod === "stripe"
     paypalOrderId,           // set when paymentMethod === "paypal"
     paypalPayerId,           // set when paymentMethod === "paypal"
     paypalCaptureId,         // set when paymentMethod === "paypal" (from /capture response)
+    rapidGatewayTransactionId, // set when paymentMethod === "rapidGateway" (gateway txid, set by webhook later)
     couponCode,              // optional: a promo code the customer entered at checkout
   } = req.body;
 
@@ -230,11 +231,15 @@ export const placeOrder = asyncHandler(async (req, res) => {
     couponDiscount: appliedCoupon ? appliedCoupon.discount : 0,
     // Payment processor linkage — exactly one of these is populated
     // depending on paymentMethod. "cash" orders leave them all empty.
+    // "rapidGateway" orders are placed with paymentStatus="pending"
+    // (the gateway handles payment on its own hosted page) and the
+    // transactionId is set later by the gateway's webhook.
     paymentMethod: paymentMethod || "cash",
     stripePaymentIntentId: stripePaymentIntent?.id || "",
     paypalOrderId: paypalOrderId || "",
     paypalPayerId: paypalPayerId || "",
     paypalCaptureId: paypalCaptureId || "",
+    rapidGatewayTransactionId: rapidGatewayTransactionId || "",
   });
 
   return res.status(201).json(new ApiResponse(201, order, "Order placed successfully"));

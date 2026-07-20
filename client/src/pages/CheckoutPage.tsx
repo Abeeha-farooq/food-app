@@ -52,6 +52,7 @@ import {
   Lock,
   Tag,
   X,
+  Landmark,
 } from "lucide-react";
 
 // Stripe — only imported if the publishable key is set
@@ -74,9 +75,11 @@ import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 // TYPES
 // ============================================================
 
-// The four payment methods. "card" and "wallet" both use Stripe;
-// "paypal" uses PayPal Smart Buttons; "cash" is pay-on-delivery.
-type PaymentMethod = "cash" | "card" | "wallet" | "paypal";
+// The five payment methods. "card" and "wallet" both use Stripe;
+// "paypal" uses PayPal Smart Buttons; "cash" is pay-on-delivery;
+// "rapidGateway" uses RapidPAY / Rapid Gateway hosted checkout
+// (full-page redirect to the gateway's own checkout page).
+type PaymentMethod = "cash" | "card" | "wallet" | "paypal" | "rapidGateway";
 
 // Shape of the order returned by POST /api/orders.
 interface PlacedOrder {
@@ -204,6 +207,15 @@ const CheckoutPage = () => {
     if (paymentMethod === "cash") {
       // Cash on delivery — no Stripe/PayPal interaction. Go straight to order creation.
       await placeOrder({ paymentMethod: "cash" });
+      return;
+    }
+
+    if (paymentMethod === "rapidGateway") {
+      // Rapid Gateway — place the order first (with paymentStatus:
+      // "pending"), then call the server to get the gateway's
+      // redirect URL, then send the browser there. See
+      // handleRapidGatewayCheckout below for the full flow.
+      await handleRapidGatewayCheckout();
       return;
     }
 
@@ -340,6 +352,75 @@ const CheckoutPage = () => {
     } catch (err) {
       toast.error(getErrorMessage(err));
       setPhase(paymentMethod === "cash" ? "form" : "paying");
+    }
+  };
+
+  // ----- Handler: Rapid Gateway checkout flow -----
+  // The RapidPAY / Rapid Gateway flow is different from Stripe/PayPal:
+  // the user is redirected to the gateway's own hosted checkout page,
+  // NOT an iframe or popup. This means:
+  //   1. Place the order FIRST (with paymentStatus: "pending" — the
+  //      gateway handles payment separately on its own page).
+  //   2. Get a fresh order ID from the server response.
+  //   3. Call the server's rapid-gateway endpoint to get the
+  //      gateway's redirect URL (the server does the OAuth token
+  //      dance and submits the transaction).
+  //   4. window.location.href = redirectUrl — the browser navigates
+  //      to the gateway, the user pays, and the gateway redirects
+  //      them back to /payment/rapid-gateway/success or /failure.
+  //
+  // We intentionally DON'T use the existing placeOrder() helper
+  // because that helper transitions to the "confirmed" phase —
+  // for Rapid Gateway we want to redirect, not show a confirmation
+  // screen. (The gateway's success page is the confirmation.)
+  const handleRapidGatewayCheckout = async () => {
+    setPhase("submitting");
+    try {
+      // Step 1: place the order with paymentStatus="pending".
+      // The server will accept this because "rapidGateway" is now
+      // a recognized paymentMethod that doesn't trigger the
+      // Stripe/PayPal verification path (those paths only fire
+      // when the client claims paymentStatus="paid").
+      const restaurantId = items[0]?.restaurantId;
+      const orderRes = await api.post("/orders", {
+        restaurantId,
+        items: items.map((i) => ({
+          menuItemId: i.menuItemId,
+          quantity: i.quantity,
+        })),
+        deliveryAddress: deliveryAddress.trim(),
+        paymentStatus: "pending",
+        paymentMethod: "rapidGateway",
+        // Coupon — the server re-validates atomically (same as
+        // the other payment methods).
+        couponCode: appliedCoupon ? appliedCoupon.code : undefined,
+      });
+      const order = orderRes.data.data;
+
+      // Step 2: clear the cart — we're committed to this order.
+      // If the gateway redirect fails, the user can re-order.
+      clearCart();
+
+      // Step 3: call the server to get the gateway's redirect URL.
+      // The server does the OAuth2 token dance + transaction submit.
+      const checkoutRes = await api.post("/payments/rapid-gateway/checkout", {
+        amount: grandTotal,
+        phone: user?.contact || "",
+        email: user?.email || "",
+        orderId: order._id,
+      });
+
+      // Step 4: send the browser to the gateway. The gateway will
+      // collect payment and redirect back to /payment/rapid-gateway/
+      // success or /failure.
+      const { redirectUrl } = checkoutRes.data.data;
+      if (!redirectUrl) {
+        throw new Error("Rapid Gateway did not return a redirect URL");
+      }
+      window.location.href = redirectUrl;
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+      setPhase("form");  // back to the form so the user can retry
     }
   };
 
@@ -515,6 +596,20 @@ const CheckoutPage = () => {
                   description="Pay with your PayPal account"
                   selected={paymentMethod === "paypal"}
                   onSelect={() => setPaymentMethod("paypal")}
+                  disabled={phase !== "form"}
+                />
+                <PaymentOption
+                  // RapidPAY / Rapid Gateway — full-page redirect to the
+                  // gateway's own hosted checkout. The user completes
+                  // payment on the gateway's site, then is redirected
+                  // back to /payment/rapid-gateway/success or /failure.
+                  // The order is placed FIRST (with paymentStatus:
+                  // "pending") — the gateway handles payment separately.
+                  icon={<Landmark className="w-6 h-6 text-emerald-600" />}
+                  label="Rapid Gateway"
+                  description="Pay via RapidPAY hosted checkout"
+                  selected={paymentMethod === "rapidGateway"}
+                  onSelect={() => setPaymentMethod("rapidGateway")}
                   disabled={phase !== "form"}
                 />
               </div>
@@ -835,7 +930,11 @@ const CheckoutPage = () => {
                   className="w-full bg-orange hover:bg-hoverOrange mt-2"
                   size="lg"
                 >
-                  {paymentMethod === "cash" ? "Place order" : "Continue to payment"}
+                  {paymentMethod === "cash"
+                    ? "Place order"
+                    : paymentMethod === "rapidGateway"
+                    ? "Pay with Rapid Gateway"
+                    : "Continue to payment"}
                   <ArrowRight className="ml-2 w-4 h-4" />
                 </Button>
               )}

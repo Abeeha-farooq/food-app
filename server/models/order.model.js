@@ -195,11 +195,27 @@ const orderSchema = new mongoose.Schema(
     //
     //   - "stripe" → stripePaymentIntentId is set
     //   - "paypal" → paypalOrderId + paypalCaptureId are set
-    //   - "cash"   → none of the above (order paid on delivery)
+    //   - "cash"          → none of the above (order paid on delivery)
+    //   - "rapidGateway"  → RapidPAY / Rapid Gateway hosted checkout
     paymentMethod: {
       type: String,
-      enum: ["stripe", "paypal", "cash"],
+      enum: ["stripe", "paypal", "cash", "rapidGateway"],
       default: "cash",
+    },
+
+    // ----- Rapid Gateway payment linkage -----
+    // BASKET_ID we sent to the gateway is the order's own _id
+    // (set in the checkout request), so we don't need a separate
+    // "basket id" field — the order _id IS the basket id.
+    //
+    // rapidGatewayTransactionId is the gateway's transaction
+    // reference returned after payment completes. It's set by
+    // the webhook (or the success-page callback if there's no
+    // webhook). We index it so refunds / lookups by txid are fast.
+    rapidGatewayTransactionId: {
+      type: String,
+      default: "",
+      index: true,
     },
 
     // ----- Stripe payment linkage -----
