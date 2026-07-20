@@ -53,10 +53,18 @@ import ApiResponse from "../utils/apiResponse.js";
 // Safepay's API base URL switches between sandbox and live.
 // SF_MODE defaults to "sandbox" so a fresh deployment can't
 // accidentally hit the real payment endpoint.
+//
+// IMPORTANT — the host is `*.getsafepay.com`, NOT `*.safepay.pk`.
+// I initially hardcoded the `.pk` domain (which is Safepay's
+// marketing/docs site) and got `getaddrinfo ENOTFOUND` because
+// `api.safepay.pk` doesn't resolve. The actual API lives on
+// `sandbox.api.getsafepay.com` (sandbox) and `api.getsafepay.com`
+// (live). The dashboard at https://sandbox.api.getsafepay.com/
+// dashboard/developers/api confirms this.
 const SF_MODE = (process.env.SF_MODE || "sandbox").toLowerCase();
 const SF_API = SF_MODE === "live"
-  ? "https://api.safepay.pk"
-  : "https://api.sandbox.safepay.pk";
+  ? "https://api.getsafepay.com"
+  : "https://sandbox.api.getsafepay.com";
 
 // The hosted-checkout page where the user actually pays. The
 // checkout token is appended to this URL.
@@ -144,22 +152,48 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   };
 
   // ----- Send the request to Safepay -----
-  // The exact endpoint and field names are based on the standard
+  // The exact endpoint path is a guess based on the standard
   // hosted-checkout pattern. If Safepay returns a 4xx, the error
   // body will tell you which field is wrong. See the comments
   // at the top of this file for what to check.
-  const safepayRes = await fetch(`${SF_API}/v1/wallet/checkout`, {
-    method: "POST",
-    headers: {
-      // Safepay uses the SECRET key as a Bearer token. The public
-      // key would be used by the frontend if we used the Safepay.js
-      // widget — for the hosted-page redirect, only the secret
-      // is needed on the backend.
-      Authorization: `Bearer ${secretKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(requestBody),
-  });
+  const requestUrl = `${SF_API}/v1/wallet/checkout`;
+
+  // Log the URL we're hitting so the user can confirm the host
+  // is correct in the server logs.
+  console.log(
+    `[Safepay] POST ${requestUrl} (mode=${SF_MODE}, orderId=${orderId}, amount=${Number(amount)})`
+  );
+
+  let safepayRes;
+  try {
+    safepayRes = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        // Safepay uses the SECRET key as a Bearer token. The public
+        // key would be used by the frontend if we used the Safepay.js
+        // widget — for the hosted-page redirect, only the secret
+        // is needed on the backend.
+        Authorization: `Bearer ${secretKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+  } catch (networkErr) {
+    // DNS / connection errors land here (e.g. wrong host). The
+    // default "fetch failed" error is useless — wrap it with
+    // the actual URL we tried, so the user can see in one line
+    // whether the host is wrong vs. whether the endpoint is
+    // wrong vs. whether the API is down.
+    console.error(
+      `[Safefetch failed] ${networkErr.message} — could not reach ${requestUrl}. ` +
+        `Check SF_MODE (${SF_MODE}) and the Safepay host.`
+    );
+    throw new ApiError(
+      502,
+      `Could not reach Safepay at ${requestUrl}. ${networkErr.message}. ` +
+        `If the host is wrong, fix SF_MODE (currently "${SF_MODE}").`
+    );
+  }
 
   // ----- Parse the response -----
   // Safepay's response shape is usually:
