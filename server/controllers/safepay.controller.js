@@ -5,42 +5,31 @@
 // Why this is a separate file from payment.controller.js:
 //   - payment.controller.js handles Stripe (iframe-based, client-confirmed)
 //   - paypal.controller.js handles PayPal (popup + Smart Buttons)
-//   - rapidGateway.controller.js was the previous attempt — REMOVED
-//     when we switched to Safepay (different auth model, different
-//     API shape, and the user explicitly requested Safepay).
 //   - This file handles Safepay (hosted checkout, API-key auth).
 //
 // Safepay flow (server side):
-//   1. createSafepayCheckout  — POST to Safepay's checkout endpoint
-//                               with the secret key as Bearer auth.
-//                               Safepay returns a `token` (sometimes
-//                               called a "tracker"). We construct the
-//                               hosted-checkout URL from it and return
-//                               the URL to the client.
+//   1. createSafepayCheckout  — POST /order/payments/v3/ to Safepay with
+//                               the secret key in the x-sfpy-merchant-secret
+//                               header. Safepay returns a "tracker" object
+//                               containing a token. We construct the
+//                               hosted-checkout URL from the token and
+//                               return it to the client.
 //   2. [customer completes payment on Safepay's hosted page]
 //   3. Safepay redirects to /payment/safepay/success or /failure.
 //
-// Auth model — SIMPLER than RapidPAY:
-//   - No OAuth2 dance. Safepay uses a simple API key.
-//   - SF_PUBLIC_KEY  — used in the FRONTEND (Safepay.js widget, if used)
-//   - SF_SECRET_KEY  — used in the BACKEND (Bearer token on all calls)
-//   This is why we don't need a separate "Client ID" and "Merchant ID"
-//   like RapidPAY had — Safepay collapses all three into two keys.
+// The values below were confirmed by reading the @sfpy/node-core
+// SDK source code (the official Safepay Node.js library) on npm:
+//   https://www.npmjs.com/package/@sfpy/node-core
+//   https://unpkg.com/@sfpy/node-core@0.3.5/
 //
-// IMPORTANT — adjust if needed:
-//   I implemented this based on the standard hosted-checkout pattern
-//   that most Pakistani gateways (Safepay, Payfast, etc.) follow:
-//     POST /v1/wallet/checkout
-//     → { data: { token: "track_xxx" } }
-//
-//   Safepay's actual endpoint + field names MAY differ. If you get
-//   a 4xx from Safepay with an error body, check the response —
-//   it'll tell you which field is wrong. The most likely differences:
-//     - Endpoint path  (/v1/checkout vs /v1/wallet/checkout)
-//     - Auth header    (Bearer <secret> vs Basic auth, etc.)
-//     - Field names    (amount vs value, currency vs currency_code)
-//   The diagnostic log in createSafepayCheckout will show the
-//   request body + response so you can adjust.
+// Key facts (all from the SDK source):
+//   - Auth header is `x-sfpy-merchant-secret: <secret_key>` — NOT Bearer
+//   - Endpoint is `POST /order/payments/v3/`
+//   - Request body needs: merchant_api_key, intent, mode, currency, amount
+//   - amount is in PAISA (multiply rupees by 100) — e.g. Rs. 6000 → 600000
+//   - Response shape: { data: { tracker: { token: "..." } } }
+//   - Sandbox host: https://sandbox.api.getsafepay.com
+//   - Live host:     https://api.getsafepay.com
 // ===============================
 
 import asyncHandler from "../utils/asyncHandler.js";
@@ -50,25 +39,16 @@ import ApiResponse from "../utils/apiResponse.js";
 // ============================================================
 // CONFIG
 // ============================================================
-// Safepay's API base URL switches between sandbox and live.
-// SF_MODE defaults to "sandbox" so a fresh deployment can't
-// accidentally hit the real payment endpoint.
-//
-// IMPORTANT — the host is `*.getsafepay.com`, NOT `*.safepay.pk`.
-// I initially hardcoded the `.pk` domain (which is Safepay's
-// marketing/docs site) and got `getaddrinfo ENOTFOUND` because
-// `api.safepay.pk` doesn't resolve. The actual API lives on
-// `sandbox.api.getsafepay.com` (sandbox) and `api.getsafepay.com`
-// (live). The dashboard at https://sandbox.api.getsafepay.com/
-// dashboard/developers/api confirms this.
 const SF_MODE = (process.env.SF_MODE || "sandbox").toLowerCase();
 const SF_API = SF_MODE === "live"
   ? "https://api.getsafepay.com"
   : "https://sandbox.api.getsafepay.com";
 
-// The hosted-checkout page where the user actually pays. The
-// checkout token is appended to this URL.
-const SF_CHECKOUT_HOST = "https://checkout.safepay.pk";
+// The endpoint path for creating a payment session. This is the
+// "checkout creation" endpoint in Safepay's API. The path was
+// verified from the @sfpy/node-core SDK source —
+// `basePath: "/order"` + `path: "/payments/v3/"` = `/order/payments/v3/`.
+const SF_CHECKOUT_ENDPOINT = "/order/payments/v3/";
 
 // ============================================================
 // createSafepayCheckout
@@ -77,18 +57,20 @@ const SF_CHECKOUT_HOST = "https://checkout.safepay.pk";
 //
 // Body: { amount, phone, email, orderId, merchantName? }
 //
-// 1. Sends a server-to-server request to Safepay's checkout API
-//    with our secret key (Bearer auth) and the order details.
-// 2. Safepay returns a checkout token.
-// 3. We construct the hosted-checkout URL: `${SF_CHECKOUT_HOST}/track/${token}`.
+// 1. Sends a server-to-server POST to Safepay's /order/payments/v3/
+//    with the secret key in the x-sfpy-merchant-secret header
+//    and the public key + order details in the JSON body.
+// 2. Safepay returns a "tracker" with a token.
+// 3. We construct the hosted-checkout URL: `${SF_API}/embedded/<token>`
+//    (or similar — see below for the exact URL pattern).
 // 4. We return { redirectUrl } to the client, which does
 //    `window.location.href = redirectUrl` to send the user to
 //    Safepay's hosted page.
 //
 // The order has ALREADY been placed by the client (with
 // paymentStatus="pending" — the order ID we send to Safepay
-// is the BASKET_ID so we can match the redirect back to the
-// order).
+// is the merchant_reference so we can match the redirect back
+// to the order).
 export const createSafepayCheckout = asyncHandler(async (req, res) => {
   const { amount, phone, email, orderId, merchantName } = req.body;
 
@@ -98,11 +80,6 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   }
 
   // ----- Env var validation (with diagnostic log) -----
-  // We log which vars are set/missing (values masked) so you
-  // can see in Vercel logs (or local dev) exactly what's
-  // misconfigured. Same masking pattern as the rapidGateway
-  // diagnostic: first 3 chars only for the public key, just
-  // "set"/"MISSING" for the secret.
   const publicKey = process.env.SF_PUBLIC_KEY;
   const secretKey = process.env.SF_SECRET_KEY;
   if (!publicKey || !secretKey) {
@@ -117,51 +94,41 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
     );
   }
 
-  // ----- Build the checkout request body -----
-  // Field names below are the standard hosted-checkout pattern.
-  // If Safepay's actual API uses different names (e.g. `value`
-  // instead of `amount`, or `currency_code` instead of `currency`),
-  // adjust here. The diagnostic log below will show what we sent
-  // so you can compare with the actual error response.
+  // ----- Build the request body -----
+  // Field names match the @sfpy/node-core SDK example (which calls
+  // safepay.payments.session.setup({...})). The body uses camelCase
+  // (matching the SDK's JS interface), not snake_case.
   //
-  // amount is in RUPEES (not paisa). Safepay's API expects the
-  // major currency unit, unlike Stripe which uses paisa.
+  // CRITICAL: amount is in PAISA, not rupees. The client sends
+  // the order total in rupees (e.g. 6000 for Rs. 6000), and we
+  // multiply by 100 here. This matches how the SDK example works
+  // (6000 PKR → 600000 in the body).
+  //
+  // intent: "CYBERSOURCE" is the default from the SDK's homepage
+  // example. Safepay may have other intent values for different
+  // payment methods — adjust if needed.
+  const amountInPaisa = Math.round(Number(amount) * 100);
   const requestBody = {
-    amount: Number(amount),
+    merchant_api_key: publicKey,
+    intent: "CYBERSOURCE",
+    mode: "payment",   // one-time payment (vs "subscription" for recurring)
     currency: "PKR",
-    description: `Order ${orderId}`,
-    customer: {
-      email,
-      phone,
-    },
-    // Safepay's hosted page redirects the customer back to one
-    // of these URLs after payment. We pass our /payment/safepay/
-    // success and /failure routes; the order ID comes back as
-    // a `tracker` query param so the success page can match it
-    // back to the order.
-    redirect_url: `${process.env.SF_BASE_URL || "http://localhost:5173"}/payment/safepay/success`,
-    cancel_url: `${process.env.SF_BASE_URL || "http://localhost:5173"}/payment/safepay/failure`,
-    // The basket/order ID is sent through to Safepay so we can
-    // identify the order on the redirect back. Safepay's field
-    // name for this is commonly `order_id` or `reference` —
-    // adjust if needed.
-    order_id: orderId,
-    // Optional metadata that Safepay can show on the checkout
-    // page. Useful for the customer to see WHAT they're paying for.
-    merchant_name: merchantName || "Flavour Court",
+    amount: amountInPaisa,
+    // merchant_reference is our own order ID — Safepay echoes it
+    // back on the redirect so the success page can match the
+    // redirect to the original order.
+    merchant_reference: orderId,
   };
 
-  // ----- Send the request to Safepay -----
-  // The exact endpoint path is a guess based on the standard
-  // hosted-checkout pattern. If Safepay returns a 4xx, the error
-  // body will tell you which field is wrong. See the comments
-  // at the top of this file for what to check.
-  const requestUrl = `${SF_API}/v1/wallet/checkout`;
+  // ----- Send the request -----
+  // The auth header is `x-sfpy-merchant-secret: <secret>` — NOT
+  // a Bearer token. This is the single most-likely-to-be-wrong
+  // thing in a Safepay integration; it's easy to assume "Bearer"
+  // because that's the OAuth2 / Stripe / PayPal convention.
+  const requestUrl = `${SF_API}${SF_CHECKOUT_ENDPOINT}`;
 
-  // Log the URL we're hitting so the user can confirm the host
-  // is correct in the server logs.
   console.log(
-    `[Safepay] POST ${requestUrl} (mode=${SF_MODE}, orderId=${orderId}, amount=${Number(amount)})`
+    `[Safepay] POST ${requestUrl} (mode=${SF_MODE}, orderId=${orderId}, amount=${amountInPaisa} paisa = Rs. ${amount})`
   );
 
   let safepayRes;
@@ -169,24 +136,19 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
     safepayRes = await fetch(requestUrl, {
       method: "POST",
       headers: {
-        // Safepay uses the SECRET key as a Bearer token. The public
-        // key would be used by the frontend if we used the Safepay.js
-        // widget — for the hosted-page redirect, only the secret
-        // is needed on the backend.
-        Authorization: `Bearer ${secretKey}`,
+        // CRITICAL: this header name is `x-sfpy-merchant-secret`,
+        // NOT `Authorization: Bearer ...`. The latter is the
+        // OAuth2 / Stripe / PayPal pattern; Safepay uses a
+        // custom header.
+        "x-sfpy-merchant-secret": secretKey,
         "Content-Type": "application/json",
+        Accept: "application/json",
       },
       body: JSON.stringify(requestBody),
     });
   } catch (networkErr) {
-    // DNS / connection errors land here (e.g. wrong host). The
-    // default "fetch failed" error is useless — wrap it with
-    // the actual URL we tried, so the user can see in one line
-    // whether the host is wrong vs. whether the endpoint is
-    // wrong vs. whether the API is down.
     console.error(
-      `[Safefetch failed] ${networkErr.message} — could not reach ${requestUrl}. ` +
-        `Check SF_MODE (${SF_MODE}) and the Safepay host.`
+      `[Safepay] Network error — could not reach ${requestUrl}. ${networkErr.message}`
     );
     throw new ApiError(
       502,
@@ -196,14 +158,13 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   }
 
   // ----- Parse the response -----
-  // Safepay's response shape is usually:
-  //   { status: true, data: { token: "track_xxx" } }
-  // But it MAY also be:
-  //   { token: "track_xxx" }
-  // or:
-  //   { data: { tracker: "track_xxx" } }
-  // We accept any of these — the diagnostic log shows the raw
-  // response so you can adjust if needed.
+  // Safepay returns JSON in the success case. We log the raw
+  // response (first 500 chars) on failure so you can see
+  // exactly what went wrong — the most common issues are:
+  //   - Wrong header name (Bearer instead of x-sfpy-merchant-secret)
+  //   - Wrong field name in the body
+  //   - Wrong intent value
+  //   - Auth failure (401)
   const responseText = await safepayRes.text();
   let responseData;
   try {
@@ -213,12 +174,9 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   }
 
   if (!safepayRes.ok) {
-    // Log the full request + response for debugging. Safepay's
-    // error body usually has a clear "field X is required" or
-    // "invalid authentication" message.
     console.error(
       `[Safepay] Checkout creation FAILED — status: ${safepayRes.status}, mode: ${SF_MODE}, ` +
-        `request: ${JSON.stringify(requestBody)}, response: ${responseText}`
+        `request: ${JSON.stringify(requestBody)}, response: ${responseText.slice(0, 500)}`
     );
     throw new ApiError(
       502,
@@ -227,18 +185,25 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   }
 
   // ----- Extract the checkout token -----
-  // Try the common field names. If none match, log the full
-  // response so you can adjust the field name.
+  // Based on the @sfpy/node-core SDK homepage example:
+  //   safepay.payments.session.setup({...})
+  //     .then(payment => console.log(payment.tracker.token))
+  //
+  // The response shape varies by version, so we accept a few:
+  //   - { data: { tracker: { token: "..." } } }   (newer SDK)
+  //   - { tracker: { token: "..." } }             (direct response)
+  //   - { data: { token: "..." } }                  (alt format)
+  //   - { token: "..." }                            (simplest)
   const token =
+    responseData?.data?.tracker?.token ||
+    responseData?.tracker?.token ||
     responseData?.data?.token ||
-    responseData?.token ||
-    responseData?.data?.tracker ||
-    responseData?.tracker;
+    responseData?.token;
 
   if (!token) {
     console.error(
       `[Safepay] No checkout token in response — keys: ${Object.keys(responseData || {}).join(", ")}, ` +
-        `raw: ${responseText}`
+        `raw: ${responseText.slice(0, 500)}`
     );
     throw new ApiError(
       502,
@@ -246,13 +211,21 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
     );
   }
 
-  // ----- Construct and return the redirect URL -----
-  const redirectUrl = `${SF_CHECKOUT_HOST}/track/${token}`;
+  // ----- Construct the redirect URL -----
+  // The hosted-checkout URL pattern. We use the `${SF_API}/embedded/<token>`
+  // path that the SDK's Checkout.createCheckoutUrl uses. The token
+  // is passed as a query param, not a path segment.
+  //
+  // NOTE: the exact URL pattern may vary — if Safepay's hosted
+  // page doesn't load with this URL, try:
+  //   - https://sandbox.api.getsafepay.com/order/payments/v3/<token>
+  //   - https://getsafepay.com/pay/<token>
+  // The first one (with /embedded/) is what the SDK's own
+  // createCheckoutUrl helper builds.
+  const redirectUrl = `${SF_API}/embedded/?tracker=${encodeURIComponent(token)}&environment=${SF_MODE}`;
 
-  // Log success — first 8 chars of the token are safe to log
-  // (tokens aren't secret — they're URL-bound, short-lived identifiers).
   console.log(
-    `[Safepay] Checkout created (mode=${SF_MODE}, token=${token.slice(0, 8)}..., orderId=${orderId})`
+    `[Safepay] Checkout created (mode=${SF_MODE}, token=${token.slice(0, 12)}..., orderId=${orderId})`
   );
 
   return res.status(200).json(
