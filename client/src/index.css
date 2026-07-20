@@ -183,6 +183,110 @@ textarea,
   /* === Light mode defaults === */
   color: #1f2937;                 /* gray-800 — dark text on light bg */
   background-color: #ffffff;        /* white */
+
+  /* ============================================================
+     shadcn/ui THEME VARIABLES
+     ============================================================
+     The Card, Checkbox, Button, Badge, Input, and other shadcn
+     components in src/components/ui/ reference these CSS variables
+     via Tailwind's `hsl(var(--...))` pattern (see tailwind.config.js).
+     Without these definitions, classes like `bg-primary` resolve
+     to `background-color: hsl()` — which the browser silently
+     ignores, leaving the element transparent.
+
+     The most visible symptom of the missing variables was the
+     Checkbox: `data-[state=checked]:bg-primary` did nothing, so
+     checked checkboxes looked unchecked. The filter state WAS
+     toggling (chips appeared, results updated) — users just
+     couldn't see it in the checkbox list.
+
+     --primary is set to the brand orange HSL (#d19254 ≈ hsl(30 58% 57%))
+     so the Checkbox shows the app's accent color when checked,
+     matching the orange theme used everywhere else.
+
+     HSL values are stored as the three bare numbers (no hsl()
+     wrapper) so Tailwind's `hsl(var(--primary))` becomes
+     `hsl(30 58% 57%)` — a valid CSS color.
+     ============================================================ */
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+
+  /* Brand orange — matches --button so the Checkbox shows the
+     app's accent color when checked. */
+  --primary: 30 58% 57%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 222.2 84% 4.9%;
+
+  --chart-1: 12 76% 61%;
+  --chart-2: 173 58% 39%;
+  --chart-3: 197 37% 24%;
+  --chart-4: 43 74% 66%;
+  --chart-5: 27 87% 67%;
+}
+
+/* ============================================================
+   DARK MODE shadcn VARIABLES
+   ============================================================
+   The ThemeProvider toggles `.dark` on <html>. These overrides
+   re-define the same variables for dark mode. --primary stays
+   the brand orange in both modes (the accent color is the same
+   whether the background is light or dark).
+   ============================================================ */
+.dark {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+
+  --primary: 30 58% 57%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 217.2 32.6% 17.5%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 212.7 26.8% 83.9%;
+
+  --chart-1: 220 70% 50%;
+  --chart-2: 160 60% 45%;
+  --chart-3: 30 80% 55%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 340 75% 55%;
 }
 
 body {
