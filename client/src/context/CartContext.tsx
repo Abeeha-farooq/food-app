@@ -98,9 +98,17 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
   // Pulled out so the same logic isn't duplicated in two places.
   // Wrapped in useCallback so it has a stable reference for the
   // confirmReplace callback below.
+  //
+  // IMPORTANT — the toast is OUTSIDE the setItems updater. In React
+  // 18 StrictMode (dev mode), setState updaters are called TWICE to
+  // catch impure functions. Side effects inside the updater (like
+  // toast.success) would fire twice. We use a closure variable
+  // (`wasNew`) to record the result of the updater, then fire the
+  // toast in the event-handler scope where it runs once.
   const performAdd = useCallback(
     (item: Omit<CartItem, "id" | "quantity">, quantity: number) => {
       const id = makeId(item.menuItemId, item.restaurantId);
+      let wasNew = false;
       setItems((prev) => {
         const existing = prev.find((i) => i.id === id);
         if (existing) {
@@ -109,10 +117,13 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
             i.id === id ? { ...i, quantity: i.quantity + quantity } : i
           );
         }
-        // New item
-        toast.success(`Added ${item.name} to cart`);
+        // New item — record it so the caller can fire the toast
+        wasNew = true;
         return [...prev, { ...item, id, quantity }];
       });
+      if (wasNew) {
+        toast.success(`Added ${item.name} to cart`);
+      }
     },
     []
   );
@@ -127,15 +138,23 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
     // We deliberately do NOT check this for updateQuantity or
     // removeItem — those operate on items already in the cart, so
     // they can't trigger a cross-restaurant conflict.
+    //
+    // We use closure variables to communicate the result of the
+    // updater out, so side effects (toast / modal) fire ONCE in the
+    // event-handler scope — not inside the updater where React 18
+    // StrictMode would invoke them twice.
+    let wasNew = false;
+    let hadConflict = false;
+    let conflictData: CartConflict | null = null;
+
     setItems((currentItems) => {
       if (currentItems.length > 0) {
         const currentRestaurantId = currentItems[0].restaurantId;
         if (currentRestaurantId !== item.restaurantId) {
           // CONFLICT — don't add. Park the request and surface
-          // the modal. We use queueMicrotask to schedule the
-          // modal state update for the next tick, so the
-          // setItems updater returns synchronously without
-          // mutating anything (it's supposed to be pure).
+          // the modal. We capture the data here and schedule the
+          // setState OUTSIDE the updater (via queueMicrotask in
+          // the post-setItems block) so the updater stays pure.
           //
           // We read `currentItems` (the live cart at the time
           // of the add call) instead of the `items` state
@@ -143,20 +162,19 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
           // could add multiple items in quick succession
           // before React re-renders, and each setItems call
           // sees the latest currentItems.
-          queueMicrotask(() => {
-            setPendingConflict({
-              pendingItem: item,
-              pendingQuantity: quantity,
-              conflictRestaurant: {
-                id: currentRestaurantId,
-                name: currentItems[0].restaurantName,
-                itemCount: currentItems.reduce(
-                  (sum, i) => sum + i.quantity,
-                  0
-                ),
-              },
-            });
-          });
+          hadConflict = true;
+          conflictData = {
+            pendingItem: item,
+            pendingQuantity: quantity,
+            conflictRestaurant: {
+              id: currentRestaurantId,
+              name: currentItems[0].restaurantName,
+              itemCount: currentItems.reduce(
+                (sum, i) => sum + i.quantity,
+                0
+              ),
+            },
+          };
           return currentItems;   // no-op — don't mutate the cart
         }
       }
@@ -170,9 +188,18 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
           i.id === id ? { ...i, quantity: i.quantity + quantity } : i
         );
       }
-      toast.success(`Added ${item.name} to cart`);
+      wasNew = true;
       return [...currentItems, { ...item, id, quantity }];
     });
+
+    // Side effects fire ONCE here (event-handler scope, not inside
+    // the updater — so StrictMode's double-invocation of the
+    // updater doesn't double-fire them).
+    if (hadConflict && conflictData) {
+      queueMicrotask(() => setPendingConflict(conflictData));
+    } else if (wasNew) {
+      toast.success(`Added ${item.name} to cart`);
+    }
   };
 
   // ----- Confirm: clear cart, add the pending item -----
@@ -216,11 +243,17 @@ export const CartProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const removeItem: CartContextValue["removeItem"] = (id) => {
+    // Capture the removed item's name OUTSIDE the updater so the
+    // toast fires once (StrictMode invokes the updater twice).
+    let removedName: string | null = null;
     setItems((prev) => {
       const item = prev.find((i) => i.id === id);
-      if (item) toast.success(`Removed ${item.name} from cart`);
+      if (item) removedName = item.name;
       return prev.filter((i) => i.id !== id);
     });
+    if (removedName) {
+      toast.success(`Removed ${removedName} from cart`);
+    }
   };
 
   const clearCart = () => {
