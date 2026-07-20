@@ -412,16 +412,36 @@ const SearchPage = () => {
         {/* ============== Two-column body ============== */}
         <div
           className={cn(
+            // Grid (not flex) for a critical reason: position: sticky on
+            // the filter sidebar needs its containing block to be TALLER
+            // than the sticky element, otherwise there's no scroll
+            // runway for it to stick within.
+            //
+            // In a flex row, the aside's height depends on `align-items`
+            // (defaults to `stretch`) and can be unreliable across
+            // browsers — especially when combined with `flex-shrink-0`.
+            // In a grid row, grid items NATURALLY stretch to the row
+            // height (the height of the tallest sibling, which is the
+            // results column). No ambiguity, no extra class needed.
+            //
+            // Column sizing:
+            //   - mobile: single column (grid-cols-1) — aside is hidden
+            //   - xl+:    two columns [auto_1fr] — first column sizes to
+            //             the aside's `w-72 2xl:w-80`, second column
+            //             takes the rest
+            //
             // Two-column body gap:
             //   - mobile: 24px (just stack vertically)
             //   - xl+: 32px between filter sidebar and results
-            "flex flex-col xl:flex-row gap-6 xl:gap-8"
+            "grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6 xl:gap-8"
           )}
         >
           {/* Filters — sticky on desktop, drawer on mobile.
               The FilterPage is now a self-contained Card with its own
-              header, sections, and footer — so we just drop it in. */}
-          <aside className="hidden xl:block w-72 2xl:w-80 flex-shrink-0">
+              header, sections, and footer — so we just drop it in.
+              `top-20` (= 5rem = 80px) clears the fixed NavBar
+              (h-16 = 64px) with a 16px breathing-room gap. */}
+          <aside className="hidden xl:block w-72 2xl:w-80 min-w-0">
             <div className="sticky top-20">
               <FilterPage
                 selectedCuisines={selectedCuisines}
@@ -485,8 +505,13 @@ const SearchPage = () => {
             </div>
           )}
 
-          {/* Results */}
-          <div className="flex-1 min-w-0">
+          {/* Results — `min-w-0` is still required in grid contexts to
+              allow the inner cards to shrink below their intrinsic
+              min-content width (otherwise long restaurant names can
+              blow out the column). `flex-1` is no longer needed because
+              the parent grid's `1fr` track already takes the remaining
+              space. */}
+          <div className="min-w-0">
             {/* Loading skeleton grid — matches the real card shape so the
                 page doesn't jump when data arrives. Grid uses the same
                 responsive spacing scale as the real results grid. */}
