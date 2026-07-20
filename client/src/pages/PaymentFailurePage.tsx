@@ -22,7 +22,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { XCircle, Home, RefreshCw, ShoppingCart, ArrowLeft } from "lucide-react";
-import { api } from "@/lib/api";
+import api from "@/lib/api";
 
 const PaymentFailurePage = () => {
   // Read ?tracker=<tracker>&orderId=<mongoId> from the URL.

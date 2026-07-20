@@ -26,9 +26,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, Home, Receipt, ArrowRight, AlertCircle } from "lucide-react";
-import { api } from "@/lib/api";
+import api, { getErrorMessage } from "@/lib/api";
 import { toast } from "sonner";
-import { getErrorMessage } from "@/lib/getErrorMessage";
 
 const PaymentSuccessPage = () => {
   // Read ?tracker=<tracker>&orderId=<mongoId> from the URL.
