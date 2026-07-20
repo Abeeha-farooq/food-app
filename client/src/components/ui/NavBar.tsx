@@ -92,19 +92,15 @@ const getNavLinks = (isAuthenticated: boolean, isAdmin: boolean): NavLink[] => {
 
     if (isAdmin) {
         // ==================== LOGGED-IN ADMIN VIEW ====================
+        // Top nav for admin = just Home, Dashboard, Profile, Logout.
+        // Admin-specific sub-pages (Orders, Restaurants, Menu, Users)
+        // live in the admin sidebar that wraps those routes — the top
+        // nav should be a single, unambiguous Dashboard link, not a
+        // dropdown that re-exposes the sidebar's links.
         return [
             ...baseLinks,
-            {
-                label: "Dashboard",
-                to: "/admin/orders",
-                icon: LayoutDashboard,
-                dropdown: [
-                    { label: "Orders",     to: "/admin/orders" },
-                    { label: "Restaurant", to: "/admin/restaurant" },
-                    { label: "Menu",       to: "/admin/menu" },
-                ],
-            },
-            { label: "Profile", to: "/profile", icon: User },
+            { label: "Dashboard", to: "/admin", icon: LayoutDashboard },
+            { label: "Profile",   to: "/profile", icon: User },
         ];
     }
 

@@ -1,8 +1,29 @@
+/* ============================================================
+   #root — full-viewport container
+   ============================================================
+   The default Vite scaffold constrains #root to max-width 1280px
+   and centers it. That was fine for a single-page demo, but it
+   breaks the auth pages (Login, Signup, ForgotPassword, etc.) which
+   use `min-h-screen flex items-center justify-center` to center
+   themselves on the viewport — the form was centering inside a
+   1280px-wide centered box instead of on the actual page.
+
+   We now make #root a full-viewport container. Each page is
+   responsible for its own internal layout:
+     - Auth pages: full-height flex centering (centered on viewport)
+     - MainLayout (home, search, etc.): own NavBar/Footer + Outlet
+     - Admin routes: own AdminLayout sidebar
+   The home page's individual sections (e.g. the 3-card grid) keep
+   their own `max-w-* mx-auto` classes so they still center within
+   the page width.
+   ============================================================ */
 #root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  width: 100%;
+  min-height: 100vh;
+  /* No max-width, no auto margin, no padding — the children own
+     their own spacing. */
+  text-align: left;  /* Override the Vite default; per-page styles
+                         set their own text-align where needed. */
 }
 
 .logo {
