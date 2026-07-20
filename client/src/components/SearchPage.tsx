@@ -48,7 +48,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
+import { SearchBar } from "./ui/SearchBar";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -125,10 +125,11 @@ const SearchPage = () => {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // The "applied" search term — drives the API call. The SearchBar
+  // component owns the input field and calls onSubmitQuery to update
+  // this. We no longer need a separate "draft" state since the
+  // SearchBar manages the input value internally.
   const [searchTerm, setSearchTerm] = useState(initial.urlSearch);
-  // We keep a separate "draft" search input so the user can type freely
-  // and we only refetch when they press Enter / the search button.
-  const [searchDraft, setSearchDraft] = useState(initial.urlSearch);
 
   // Selected filters from FilterPage (lifted to this component).
   // Seeded from the URL on first render so refresh / shared links work.
@@ -242,14 +243,6 @@ const SearchPage = () => {
 
   const handleRetry = () => setRetryCount((c) => c + 1);
 
-  // Submit handler for the in-page search bar. The NavBar already has a
-  // hero search that navigates to /search/:text, but having an input here
-  // means the user can refine without going back to the home page.
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSearchTerm(searchDraft.trim());
-  };
-
   // Count of active filters — shown on the mobile "Filters" button so the
   // user knows how many are applied.
   const activeFilterCount = selectedCuisines.length + selectedPrices.length;
@@ -280,37 +273,21 @@ const SearchPage = () => {
             "mb-5 md:mb-7"
           )}
         >
-          {/* In-page search */}
-          <form
-            onSubmit={handleSearchSubmit}
-            className="relative flex-1 min-w-0"
-            role="search"
-          >
-            <SearchIcon className="absolute left-3 sm:left-3.5 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none" />
-            <Input
-              type="text"
-              value={searchDraft}
-              onChange={(e) => setSearchDraft(e.target.value)}
-              placeholder="Search by restaurant name…"
-              // h-10 (40px) is the thumb-friendly size on mobile.
-              // sm:h-11 (44px) feels more solid on tablet+.
-              className="pl-9 sm:pl-10 pr-9 sm:pr-10 h-10 sm:h-11 bg-white text-sm sm:text-base rounded-lg sm:rounded-xl border-gray-200 focus-visible:ring-orange-400"
-              aria-label="Search restaurants"
-            />
-            {searchDraft && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchDraft("");
-                  setSearchTerm("");
-                }}
-                aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 p-1 rounded-md transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </form>
+          {/* In-page search — uses the shared <SearchBar> with
+              type-ahead suggestions. We pass onSubmitQuery to
+              update the page's filter state instead of navigating
+              away (the SearchBar's default is to navigate to
+              /search/:q, but we want to stay on this page and
+              just refetch). */}
+          <SearchBar
+            variant="inline"
+            defaultValue={searchTerm}
+            onSubmitQuery={(q) => setSearchTerm(q)}
+            // No showSubmitButton — the inline variant doesn't
+            // render a button, and the user can still press Enter.
+            className="flex-1 min-w-0"
+            inputClassName="h-10 sm:h-11 bg-white text-sm sm:text-base rounded-lg sm:rounded-xl border-gray-200 focus-visible:ring-orange-400"
+          />
 
           {/* Sort dropdown — kept on the right on all sizes */}
           <div className="relative">
@@ -369,7 +346,6 @@ const SearchPage = () => {
               <Badge
                 onClick={() => {
                   setSearchTerm("");
-                  setSearchDraft("");
                 }}
                 className={cn(
                   "cursor-pointer bg-orange-50 text-orange-700",
@@ -423,7 +399,6 @@ const SearchPage = () => {
             <button
               onClick={() => {
                 setSearchTerm("");
-                setSearchDraft("");
                 setSelectedCuisines([]);
                 setSelectedPrices([]);
               }}

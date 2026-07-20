@@ -127,7 +127,14 @@ const Profile = () => {
       <>
       {/* Avatar + Name */}
       <div className="flex flex-col md:flex-row md:items-start gap-4">
-        <div className="relative md:w-28 md:h-24 w-20 h-20 bg-gray-300 rounded-full flex items-center justify-center">
+        {/* Avatar container — MUST be a perfect square for `rounded-full`
+            to render as a true circle. The previous `md:w-28 md:h-24` was
+            112×96 (non-square), so the rounded shape was an OVAL and the
+            fallback "AB" text sat off-center inside it.
+            We use `md:size-28` (Tailwind's `size-` utility = w + h in one)
+            to guarantee a square on every breakpoint. `shrink-0` keeps
+            the avatar from being compressed by the flex row. */}
+        <div className="relative w-20 h-20 md:size-28 shrink-0 bg-gray-300 rounded-full flex items-center justify-center">
           <Avatar className="w-full h-full">
             <AvatarImage src={selectedProfilePicture} className="w-full h-full object-cover rounded-full" />
             <AvatarFallback>

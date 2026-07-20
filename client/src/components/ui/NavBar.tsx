@@ -232,13 +232,23 @@ const NavBar = () => {
                         generic user icon when:
                           - no profile picture is set
                           - AND no fullname is set
-                        so the avatar never shows the broken "?" char. */}
+                        so the avatar never shows the broken "?" char.
+
+                        The Link wrapper has explicit `h-10 w-10` +
+                        `inline-flex items-center justify-center` so
+                        the avatar's natural 40×40 size is enforced
+                        even when this Link sits inside a flex
+                        container with `items-center` — without the
+                        explicit size the Link was compressing to
+                        less than 40px and `rounded-full` was
+                        rendering as a small oval instead of a
+                        proper circle. */}
                     {isAuthenticated && user && (
                         <Link
                             to="/profile"
                             aria-label="Open profile"
                             title={user.fullname || "Profile"}
-                            className="rounded-full focus:outline-none focus:ring-2 focus:ring-orange-400"
+                            className="h-10 w-10 inline-flex items-center justify-center rounded-full focus:outline-none focus:ring-2 focus:ring-orange-400 shrink-0"
                         >
                             <Avatar>
                                 <AvatarImage src={user.profilePicture || ""} />

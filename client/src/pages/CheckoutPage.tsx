@@ -50,6 +50,8 @@ import {
   Home,
   Receipt,
   Lock,
+  Tag,
+  X,
 } from "lucide-react";
 
 // Stripe — only imported if the publishable key is set
@@ -85,6 +87,18 @@ interface PlacedOrder {
   deliveryAddress: string;
   items: { name: string; quantity: number; price: number }[];
   createdAt: string;
+}
+
+// Shape of a successfully validated coupon. The server's
+// /api/coupons/validate endpoint returns this; we keep a copy
+// in client state so the order-summary card can show the
+// discount line, and so we can re-send the code when the
+// user finally places the order.
+interface AppliedCoupon {
+  code: string;
+  discount: number;        // Rupee amount the server calculated
+  discountType: "percentage" | "fixed";
+  discountValue: number;   // raw value (e.g. 20 for 20%, or Rs. 100)
 }
 
 // ============================================================
@@ -132,11 +146,29 @@ const CheckoutPage = () => {
   // ----- Order state -----
   const [placedOrder, setPlacedOrder] = useState<PlacedOrder | null>(null);
 
+  // ----- Coupon state -----
+  // The customer can type a code, click "Apply", and we call
+  // POST /api/coupons/validate to preview the discount. We keep
+  // the applied coupon in state so:
+  //   1. The order summary card shows the discount line.
+  //   2. The grandTotal we pass to Stripe is the DISCOUNTED total.
+  //   3. We re-send the code to /api/orders at place-order time
+  //      (the server re-validates atomically — a coupon can expire
+  //      between preview and place, so the client cannot just claim
+  //      a discount without the server's permission).
+  const [couponInput, setCouponInput] = useState<string>("");
+  const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [validatingCoupon, setValidatingCoupon] = useState<boolean>(false);
+
   // ----- Derived -----
   const deliveryFee = 50;
-  const grandTotal = totalPrice + deliveryFee;
+  const couponDiscount = appliedCoupon?.discount ?? 0;
+  const grandTotal = Math.max(0, totalPrice + deliveryFee - couponDiscount);
   // Stripe expects amount in the SMALLEST currency unit (paisa for PKR).
   // Rs. 1850 = 185000 paisa. Using integers avoids floating-point errors.
+  // IMPORTANT: this is the DISCOUNTED total — Stripe is asked to charge
+  // the customer the post-coupon amount, not the pre-coupon amount.
   const grandTotalInPaisa = Math.round(grandTotal * 100);
 
   const isFormValid = deliveryAddress.trim().length > 5 && items.length > 0;
@@ -205,6 +237,65 @@ const CheckoutPage = () => {
     }
   };
 
+  // ----- Handler: apply a coupon code -----
+  // Calls POST /api/coupons/validate with the CURRENT subtotal — the
+  // server checks min order amount, expiry, usage limit, per-user
+  // limit, etc., and returns the actual Rupee discount. This is just
+  // a PREVIEW (no state change on the server); the real atomic
+  // redemption happens inside placeOrder → tryRedeemCoupon.
+  //
+  // We send `code` (the user-typed code) and `subtotal` (cart
+  // subtotal, NOT including delivery — coupons apply to food, not
+  // the delivery fee). The server returns { valid, code, discount,
+  // discountType, discountValue, reason? }.
+  const handleApplyCoupon = async () => {
+    const trimmed = couponInput.trim();
+    if (!trimmed) {
+      setCouponError("Please enter a coupon code");
+      return;
+    }
+    setValidatingCoupon(true);
+    setCouponError(null);
+    try {
+      const res = await api.post("/coupons/validate", {
+        code: trimmed,
+        subtotal: totalPrice,
+      });
+      const data = res.data.data;
+      if (!data.valid) {
+        setCouponError(data.reason || "This coupon is not valid");
+        setAppliedCoupon(null);
+        return;
+      }
+      setAppliedCoupon({
+        code: data.code,
+        discount: data.discount,
+        discountType: data.discountType,
+        discountValue: data.discountValue,
+      });
+      setCouponInput("");   // clear the input — the badge below shows the applied code
+      setCouponError(null);
+      toast.success(`Coupon ${data.code} applied — you saved Rs. ${data.discount.toFixed(2)}`);
+    } catch (err) {
+      setCouponError(getErrorMessage(err));
+      setAppliedCoupon(null);
+    } finally {
+      setValidatingCoupon(false);
+    }
+  };
+
+  // ----- Handler: remove an applied coupon -----
+  // No server call — the preview didn't change server state. We just
+  // clear the local state so the order summary reverts to the
+  // pre-coupon totals and the next place-order call won't include
+  // a couponCode (no coupon will be redeemed).
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponError(null);
+    setCouponInput("");
+    toast.info("Coupon removed");
+  };
+
   // ----- The actual order placement (called after payment succeeds) -----
   // For Stripe: pass the PaymentIntent ID
   // For PayPal: pass the order/capture/payer IDs (from the capture response)
@@ -238,6 +329,10 @@ const CheckoutPage = () => {
         paypalOrderId: paymentData.paypalOrderId || undefined,
         paypalPayerId: paymentData.paypalPayerId || undefined,
         paypalCaptureId: paymentData.paypalCaptureId || undefined,
+        // Coupon — the server re-validates atomically inside
+        // placeOrder. If it's expired/used-up between preview and
+        // now, the order is rejected with a 400.
+        couponCode: appliedCoupon ? appliedCoupon.code : undefined,
       });
       setPlacedOrder(res.data.data);
       clearCart();
@@ -624,6 +719,83 @@ const CheckoutPage = () => {
 
               <Separator />
 
+              {/* ----- Coupon / promo code block -----
+                  Two states:
+                  1. No coupon applied → small input + Apply button
+                  2. Coupon applied    → green badge with the code +
+                     the discount amount + a remove (X) button
+                  The actual server redemption happens inside placeOrder
+                  (atomic findOneAndUpdate). This is just a preview. */}
+              {appliedCoupon ? (
+                <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-md px-3 py-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Tag className="w-4 h-4 text-green-700 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-green-800 truncate">
+                        {appliedCoupon.code}
+                      </p>
+                      <p className="text-xs text-green-700">
+                        {appliedCoupon.discountType === "percentage"
+                          ? `${appliedCoupon.discountValue}% off`
+                          : `Rs. ${appliedCoupon.discountValue.toFixed(2)} off`}
+                        {" "}— you save Rs. {appliedCoupon.discount.toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRemoveCoupon}
+                    disabled={phase === "paying" || phase === "submitting"}
+                    className="text-green-700 hover:text-green-900 hover:bg-green-100 rounded-full p-1 disabled:opacity-50"
+                    aria-label="Remove coupon"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <Label htmlFor="coupon" className="text-sm text-gray-600 flex items-center gap-1">
+                    <Tag className="w-3.5 h-3.5" /> Have a coupon code?
+                  </Label>
+                  <div className="mt-2 flex gap-2">
+                    <Input
+                      id="coupon"
+                      value={couponInput}
+                      onChange={(e) => {
+                        setCouponInput(e.target.value);
+                        // Clear stale error when the user starts typing again
+                        if (couponError) setCouponError(null);
+                      }}
+                      placeholder="e.g. WELCOME20"
+                      // uppercase as they type — coupons are case-insensitive
+                      // on the server but we normalize to uppercase for UX
+                      onInput={(e) => {
+                        const target = e.target as HTMLInputElement;
+                        target.value = target.value.toUpperCase();
+                        setCouponInput(target.value);
+                      }}
+                      disabled={phase !== "form" || validatingCoupon}
+                      className="flex-1 uppercase"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleApplyCoupon}
+                      disabled={phase !== "form" || validatingCoupon || !couponInput.trim()}
+                    >
+                      {validatingCoupon ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        "Apply"
+                      )}
+                    </Button>
+                  </div>
+                  {couponError && (
+                    <p className="mt-1.5 text-xs text-red-600">{couponError}</p>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-1.5 text-sm">
                 <div className="flex justify-between">
                   <span className="text-gray-600">
@@ -635,6 +807,17 @@ const CheckoutPage = () => {
                   <span className="text-gray-600">Delivery fee</span>
                   <span>Rs. {deliveryFee.toFixed(2)}</span>
                 </div>
+                {/* Coupon discount line — only when a coupon is applied.
+                    Shown as a negative Rupee amount in green so the
+                    customer can see exactly how much was deducted. */}
+                {appliedCoupon && (
+                  <div className="flex justify-between text-green-700">
+                    <span className="flex items-center gap-1">
+                      <Tag className="w-3.5 h-3.5" /> Coupon ({appliedCoupon.code})
+                    </span>
+                    <span>− Rs. {appliedCoupon.discount.toFixed(2)}</span>
+                  </div>
+                )}
               </div>
 
               <Separator />

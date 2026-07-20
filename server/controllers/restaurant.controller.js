@@ -78,6 +78,124 @@ export const getRestaurants = asyncHandler(async (req, res) => {
   );
 });
 
+// ------------------------------------------------------------
+// GET /api/restaurants/suggest?q=<query>&limit=8
+// ------------------------------------------------------------
+// Type-ahead autocomplete for the search bar.
+//
+// Returns a flat list of suggestions mixing two kinds:
+//   1. { type: "restaurant", _id, name, imageUrl, cuisines, city }
+//   2. { type: "cuisine",     name, count }
+//
+// Order:
+//   - Restaurants first (up to 5) — these are what the user is
+//     almost always looking for when they type a name fragment.
+//   - Then cuisines (up to 3) — picked from the union of all
+//     restaurants' cuisines, filtered by the query.
+//
+// Why not just call /api/restaurants?search=... and slice:
+//   - That endpoint is heavy (full Restaurant docs, count query,
+//     pagination overhead). It runs on every keystroke at 300ms
+//     debounce, so we want a TIGHT response: just the fields the
+//     dropdown needs, no totals, no page metadata.
+//   - It also can't surface cuisines as suggestions (it only
+//     returns restaurants), so we'd need a second call.
+//
+// Validation:
+//   - Trim + escape regex metacharacters in `q` so a user typing
+//     "pizza (" doesn't break the regex (parenthesis is special).
+//   - Cap `limit` at 10 to avoid runaway responses on weird input.
+//   - Empty / very short queries (1 char) return an empty array
+//     rather than the entire restaurant collection.
+//
+// Caching: not implemented. The query is on a tiny collection
+// (restaurants) with a simple index. For <500 restaurants this
+// completes in <5ms, well within the debounce window. If the
+// collection grows past a few thousand entries, add a TTL cache
+// (in-memory LRU keyed on lowercased q) or a text index.
+export const suggestRestaurants = asyncHandler(async (req, res) => {
+  const rawQ = String(req.query.q || "").trim();
+  const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 10);
+
+  // Require at least 2 characters before doing any DB work — saves
+  // a query on every single keystroke at the start of a word.
+  if (rawQ.length < 2) {
+    return res.status(200).json(new ApiResponse(200, [], "Type more characters to see suggestions"));
+  }
+
+  // Escape regex metacharacters so user input is treated as a
+  // literal substring. Without this, typing "pizza (" crashes the
+  // regex constructor or returns weird matches.
+  const escaped = rawQ.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(escaped, "i");
+
+  // ----- Restaurant name matches (top 5) -----
+  // We project only the fields the dropdown renders. `_id` is
+  // needed for navigation; `name` for the label; `imageUrl` for
+  // the thumbnail; `cuisines` for the secondary line; `city` for
+  // disambiguation when two restaurants share a name.
+  const restaurantMatches = await Restaurant.find(
+    { name: re },
+    { name: 1, imageUrl: 1, cuisines: 1, city: 1 }
+  )
+    .sort({ name: 1 })    // alphabetical so the dropdown is stable
+    .limit(5);
+
+  // ----- Cuisine matches (top 3) -----
+  // We pull ALL restaurants (no filter), project just `cuisines`,
+  // then count + filter in JS. This is fine because:
+  //   - `cuisines` is a small array per doc (typically 2-5 items)
+  //   - The full list of distinct cuisines across the app is tiny
+  //     (think 10-30), so the JS work is trivial
+  //   - For a few thousand restaurants the response is still <100ms
+  //
+  // If the cuisine list ever explodes past ~200 distinct values,
+  // switch to a Mongo aggregation with $unwind + $group + $match.
+  const allCuisines = await Restaurant.find({}, { cuisines: 1 }).lean();
+  const cuisineCounts = new Map();
+  for (const r of allCuisines) {
+    for (const c of r.cuisines || []) {
+      // Normalize so "Pizza" and "pizza" collapse to one bucket.
+      // We keep the original casing in the OUTPUT though, so the
+      // dropdown shows "Pizza" not "pizza".
+      const key = c.toLowerCase();
+      cuisineCounts.set(key, (cuisineCounts.get(key) || 0) + 1);
+    }
+  }
+  const cuisineMatches = Array.from(cuisineCounts.entries())
+    .filter(([key]) => re.test(key) || re.test(key.charAt(0).toUpperCase() + key.slice(1)))
+    .sort((a, b) => b[1] - a[1])   // most common first
+    .slice(0, 3)
+    .map(([key, count]) => ({
+      // Re-capitalize the first letter so the dropdown reads "Pizza"
+      // not "pizza". The original casing is lost once we lowercase
+      // for the bucket key, but cuisine names are typically single
+      // capitalized words ("Pizza", "Italian", "Burgers") so this
+      // looks fine in practice.
+      type: "cuisine",
+      name: key.charAt(0).toUpperCase() + key.slice(1),
+      count,
+    }));
+
+  // Combine — restaurants first (people search for restaurants
+  // more than cuisines), then cuisines.
+  const suggestions = [
+    ...restaurantMatches.map((r) => ({
+      type: "restaurant",
+      _id: r._id.toString(),
+      name: r.name,
+      imageUrl: r.imageUrl || "",
+      cuisines: r.cuisines || [],
+      city: r.city,
+    })),
+    ...cuisineMatches,
+  ];
+
+  return res.status(200).json(
+    new ApiResponse(200, suggestions, "Suggestions fetched")
+  );
+});
+
 // GET /api/restaurants/:id — full details (with menu + reviews + aggregate rating)
 export const getRestaurantById = asyncHandler(async (req, res) => {
   const restaurant = await Restaurant.findById(req.params.id);

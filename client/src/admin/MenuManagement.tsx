@@ -13,9 +13,12 @@
 // All data comes from the existing /api/restaurants/:id/menu/* endpoints
 // (GET/POST/PUT/DELETE) — no new APIs, no new models, no mock data.
 //
-// Image upload: we read the chosen file as a base64 data URL
-// (`data:image/jpeg;base64,...`) and send it as the `imageUrl` field.
-// The backend stores it as a string. No Cloudinary / S3 needed.
+// Image upload: we COMPRESS the chosen file in the browser before
+// reading it as a base64 data URL. This solves the 413 (Payload
+// Too Large) errors we were hitting on Vercel — see
+// src/lib/imageCompress.ts for the full why. The compressed image
+// is still a `data:image/jpeg;base64,...` URL stored in the same
+// `imageUrl` field, so no server-side changes are needed.
 // ===============================
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -23,6 +26,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { compressImage } from "@/lib/imageCompress";
 import {
   Plus,
   Pencil,
@@ -488,6 +492,12 @@ const MenuFormModal = ({
     available: item?.available ?? true,
   });
   const [saving, setSaving] = useState(false);
+  // `compressing` is true while the in-browser image resize +
+  // JPEG re-encode is running. We use it to disable the upload
+  // button and show a small spinner so the user doesn't think
+  // nothing is happening (compression on a 5MB iPhone photo
+  // takes ~200-500ms on a modern laptop).
+  const [compressing, setCompressing] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -504,25 +514,71 @@ const MenuFormModal = ({
   };
 
   // ============================================================
-  // Image upload: read the file as a base64 data URL
+  // Image upload: compress in the browser, then read as base64
   // ============================================================
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Why compress here (not on the server):
+  //   - Vercel's serverless function hard cap is 4.5 MB on the
+  //     request body. A raw 5 MB iPhone photo → ~6.7 MB base64 →
+  //     Vercel edge returns 413 BEFORE the request hits Express.
+  //   - Compressing to 1200px / JPEG q=0.85 brings a 5 MB photo
+  //     down to ~200 KB, well under the cap.
+  //   - Compression runs in the browser via canvas + toBlob — no
+  //     new dependencies, no server CPU cost, no new endpoint.
+  //
+  // The output is the same shape the old code produced: a
+  // `data:image/jpeg;base64,...` URL stored in the imageUrl
+  // field. The server, the database, and the rest of the
+  // pipeline don't need to know the image was compressed.
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Safety: don't accept huge files (>2MB)
-    if (file.size > 2 * 1024 * 1024) {
-      toast.error("Image too large. Please use an image under 2MB.");
+    // Reset the input so the SAME file can be re-picked
+    // later (otherwise selecting a file, removing it, then
+    // re-selecting the same file would fire no change event).
+    e.target.value = "";
+
+    // Sanity check: refuse if the source isn't an image. The
+    // browser's accept="image/*" attribute filters the file
+    // picker, but a determined user can pick "All files" and
+    // bypass that.
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose an image file");
       return;
     }
 
-    // FileReader converts the file to a base64 data URL
-    // e.g. "data:image/jpeg;base64,/9j/4AAQ..."
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      update("imageUrl", reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    setCompressing(true);
+    try {
+      const result = await compressImage(file, {
+        maxWidth: 1200,
+        maxHeight: 1200,
+        quality: 0.85,
+        // Force JPEG for predictable size. PNG is opt-in (the
+        // user can ask for it if they have transparency needs).
+        mimeType: "image/jpeg",
+      });
+      update("imageUrl", result.dataUrl);
+
+      // Log the compression ratio so future debugging is
+      // easier. We round to KB for readability.
+      const originalKb = Math.round(file.size / 1024);
+      const compressedKb = Math.round(result.size / 1024);
+      console.log(
+        `[image] ${file.name}: ${originalKb}KB → ${compressedKb}KB ` +
+          `(${result.width}×${result.height})`
+      );
+    } catch (err) {
+      // The compressor throws on load/encoding failures. We
+      // show a friendly toast — the rest of the form stays
+      // usable so the user can try a different file.
+      toast.error(
+        err instanceof Error
+          ? `Couldn't process image: ${err.message}`
+          : "Couldn't process image. Please try a different file."
+      );
+    } finally {
+      setCompressing(false);
+    }
   };
 
   const clearImage = () => update("imageUrl", "");
@@ -583,10 +639,23 @@ const MenuFormModal = ({
             // Preview when an image is set
             <div className="relative w-full h-48 bg-gray-100 rounded-md overflow-hidden">
               <img src={form.imageUrl} alt="Preview" className="w-full h-full object-cover" />
+              {/* Translucent overlay while the next image is
+                  being compressed — keeps the old preview
+                  visible but signals "wait, something's
+                  happening". */}
+              {compressing && (
+                <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                  <div className="flex items-center gap-2 text-sm text-gray-700 bg-white px-3 py-1.5 rounded-full shadow">
+                    <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
+                    Compressing…
+                  </div>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={clearImage}
-                className="absolute top-2 right-2 p-1.5 bg-white rounded-full shadow hover:bg-gray-100"
+                disabled={compressing}
+                className="absolute top-2 right-2 p-1.5 bg-white rounded-full shadow hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
                 aria-label="Remove image"
               >
                 <X className="w-4 h-4" />
@@ -598,11 +667,26 @@ const MenuFormModal = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full h-32 border-2 border-dashed border-gray-300 rounded-md flex flex-col items-center justify-center gap-1 hover:border-orange hover:bg-orange-50 transition-colors"
+                disabled={compressing}
+                className="w-full h-32 border-2 border-dashed border-gray-300 rounded-md flex flex-col items-center justify-center gap-1 hover:border-orange hover:bg-orange-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                <ImagePlus className="w-6 h-6 text-gray-400" />
-                <span className="text-sm text-gray-600">Click to upload an image</span>
-                <span className="text-xs text-gray-400">Max 2MB</span>
+                {compressing ? (
+                  // Compressing state — show a spinner so the
+                  // user knows something is happening. A 5MB
+                  // iPhone photo can take ~200-500ms to resize
+                  // + re-encode.
+                  <>
+                    <Loader2 className="w-6 h-6 text-orange-500 animate-spin" />
+                    <span className="text-sm text-gray-600">Compressing image…</span>
+                    <span className="text-xs text-gray-400">This usually takes less than a second</span>
+                  </>
+                ) : (
+                  <>
+                    <ImagePlus className="w-6 h-6 text-gray-400" />
+                    <span className="text-sm text-gray-600">Click to upload an image</span>
+                    <span className="text-xs text-gray-400">Any size — we'll optimize it for you</span>
+                  </>
+                )}
               </button>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-400">or paste URL:</span>

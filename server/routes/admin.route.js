@@ -3,7 +3,7 @@
 // Purpose: Routes accessible only to admin users.
 //          Houses the dashboard stats + user management endpoints
 //          (blacklist / unblacklist) + rider management endpoints
-//          (approve / reject / list available).
+//          (approve / reject / list available) + coupon CRUD.
 // ===============================
 
 import express from "express";
@@ -16,6 +16,12 @@ import {
   rejectRider,
   listAvailableRiders,
 } from "../controllers/admin.controller.js";
+import {
+  listCoupons,
+  createCoupon,
+  updateCoupon,
+  deleteCoupon,
+} from "../controllers/coupon.controller.js";
 import { verifyJWT, requireRole } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
@@ -51,5 +57,22 @@ router.post("/users/:id/unblacklist", unblacklistUser);
 router.get("/riders/available", listAvailableRiders);
 router.post("/riders/:id/approve", approveRider);
 router.post("/riders/:id/reject", rejectRider);
+
+// ----- Coupon management (CRUD) -----
+// GET    /api/admin/coupons          — list all coupons (newest first)
+// POST   /api/admin/coupons          — create a new coupon
+// PATCH  /api/admin/coupons/:id      — edit a coupon (toggle active,
+//                                       extend expiry, bump usage
+//                                       limit, etc.)
+// DELETE /api/admin/coupons/:id      — hard delete a coupon
+//
+// The /:id routes are mounted AFTER the literal "/coupons" path
+// in client code, but Express uses declaration order so this
+// doesn't matter for this specific case (we have no "/coupons"
+// literal under /api/admin).
+router.get("/coupons", listCoupons);
+router.post("/coupons", createCoupon);
+router.patch("/coupons/:id", updateCoupon);
+router.delete("/coupons/:id", deleteCoupon);
 
 export default router;

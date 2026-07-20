@@ -51,6 +51,28 @@ const orderSchema = new mongoose.Schema(
     deliveryFee: { type: Number, default: 0, min: 0 },
     totalPrice: { type: Number, required: true, min: 0 },
 
+    // ----- Coupon / promo code (denormalized for historical accuracy) -----
+    // We store BOTH the code AND the discount amount that was actually
+    // applied at order placement time. Even if the admin later edits
+    // or deletes the coupon, the historical record on this order is
+    // intact — the customer and admin can still see "this order was
+    // placed with WELCOME20 for Rs. 100 off" years later.
+    //
+    // couponCode is the normalized (uppercase, trimmed) code.
+    // couponDiscount is the Rupee amount that was deducted from
+    // totalPrice. 0 if no coupon was used.
+    couponCode: {
+      type: String,
+      default: null,
+      uppercase: true,
+      trim: true,
+    },
+    couponDiscount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     // Delivery details
     deliveryAddress: { type: String, required: true },
 

@@ -28,6 +28,7 @@ import restaurantRoutes from "./routes/restaurant.route.js";
 import orderRoutes from "./routes/order.route.js";
 import adminRoutes from "./routes/admin.route.js";
 import paymentRoutes from "./routes/payment.route.js";
+import couponRoutes from "./routes/coupon.route.js";
 import ApiError from "./utils/apiError.js";
 
 const app = express();
@@ -149,8 +150,35 @@ app.post(
 );
 
 // ----- 4. JSON body parser -----
-// Parse JSON request bodies (req.body becomes an object, not raw text)
-app.use(express.json({ limit: "16kb" }));
+// Parse JSON request bodies (req.body becomes an object, not raw text).
+//
+// `limit: "5mb"` — this used to be "16kb", which silently broke
+// any image upload (menu item photos are sent as base64 data
+// URLs inside the JSON body, and base64 inflates a 2 MB photo
+// to ~2.7 MB). The 16 kb limit was originally chosen to defend
+// against malicious giant payloads, but the practical effect
+// was to 413 every real image upload.
+//
+// We now allow up to 5 MB per request, which:
+//   - Comfortably fits a compressed menu photo (~200-400 KB
+//     after client-side resize — see client/src/lib/imageCompress.ts)
+//   - Still defends against runaway payloads (no legit endpoint
+//     sends a 5 MB JSON body)
+//
+// IMPORTANT — Vercel's edge cap:
+//   Vercel serverless functions have a 4.5 MB hard limit on
+//   the request body. If a request exceeds that, Vercel's
+//   edge returns 413 BEFORE the function is invoked. Our 5 MB
+//   Express limit is intentionally ABOVE 4.5 MB so that we
+//   don't get a confusing "413 from inside Express" — instead,
+//   anything over 4.5 MB gets a clean 413 from Vercel, and
+//   anything under 4.5 MB (the typical case) is accepted by
+//   Express.
+//
+// For larger uploads (raw files in the tens of MB), move to
+// direct-to-storage (S3 / Cloudinary / UploadThing) — those
+// don't go through the serverless function body at all.
+app.use(express.json({ limit: "5mb" }));
 
 // ----- 5. URL-encoded form data -----
 // Parse URL-encoded form data (rare, but nice to have)
@@ -200,6 +228,7 @@ app.use("/api/restaurants", restaurantRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/payments", paymentRoutes);
+app.use("/api/coupons", couponRoutes);
 
 // 404 — no route matched
 app.use((req, _res, next) => {

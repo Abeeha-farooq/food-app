@@ -1,30 +1,19 @@
 // src/components/HereSection.tsx
 // ===============================
 // Purpose: The home/landing page.
-//          Fixes the broken template-literal navigation bug
-//          and adds a proper search bar.
+//
+// The search bar uses the shared <SearchBar> component which
+// provides type-ahead suggestions (restaurants + cuisines) in
+// addition to the freeform "press Enter to search" flow. The
+// SearchBar handles all the wiring (debounce, API, dropdown,
+// keyboard nav) — this file just lays out the page.
 // ===============================
 
-import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
 import HereImage from "@/assets/hero_img.jpg";
-import { DollarSign, Utensils, Wand, Search } from "lucide-react";
-import { Input } from "./ui/input";
-import { Button } from "./ui/button";
+import { DollarSign, Utensils, Wand } from "lucide-react";
+import { SearchBar } from "./ui/SearchBar";
 
 const HereSection = () => {
-  const navigate = useNavigate();
-  const [searchText, setSearchText] = useState<string>("");
-
-  const handleSearch = (e: FormEvent) => {
-    e.preventDefault();
-    const trimmed = searchText.trim();
-    if (!trimmed) return;
-    // ✅ FIXED: was `'/search/${...}'` (single quotes — no interpolation).
-    //    Now we use backticks for proper template-literal interpolation.
-    navigate(`/search/${encodeURIComponent(trimmed)}`);
-  };
-
   return (
     <div className="w-full overflow-hidden">
       {/* Hero Section */}
@@ -43,25 +32,15 @@ const HereSection = () => {
             Your favorite meals, just a few clicks away.
           </p>
 
-          {/* Search bar — was missing entirely */}
-          <form
-            onSubmit={handleSearch}
-            className="w-full max-w-2xl flex flex-col sm:flex-row items-stretch gap-2 bg-white rounded-full p-1"
-          >
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
-              <Input
-                type="text"
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                placeholder="Search restaurants by name, city or country"
-                className="pl-9 border-none shadow-none focus-visible:ring-0 text-gray-800"
-              />
-            </div>
-            <Button type="submit" className="bg-orange hover:bg-hoverOrange rounded-full px-6">
-              Search
-            </Button>
-          </form>
+          {/* Search bar — type-ahead suggestions on every keystroke
+              (debounced 300ms). Press Enter with no suggestion
+              selected to do a freeform search. */}
+          <SearchBar
+            variant="hero"
+            className="w-full max-w-2xl"
+            showSubmitButton
+            inputClassName="h-11 sm:h-12"
+          />
         </div>
       </div>
 

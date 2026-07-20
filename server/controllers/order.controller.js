@@ -9,6 +9,7 @@ import Restaurant from "../models/restaurant.model.js";
 import User from "../models/user.model.js";
 import { verifyPayment } from "./payment.controller.js";
 import { verifyPayPalPayment } from "./paypal.controller.js";
+import { tryRedeemCoupon } from "./coupon.controller.js";
 import ApiError from "../utils/apiError.js";
 import ApiResponse from "../utils/apiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -25,6 +26,7 @@ export const placeOrder = asyncHandler(async (req, res) => {
     paypalOrderId,           // set when paymentMethod === "paypal"
     paypalPayerId,           // set when paymentMethod === "paypal"
     paypalCaptureId,         // set when paymentMethod === "paypal" (from /capture response)
+    couponCode,              // optional: a promo code the customer entered at checkout
   } = req.body;
 
   if (!restaurantId || !Array.isArray(items) || items.length === 0 || !deliveryAddress) {
@@ -132,7 +134,47 @@ export const placeOrder = asyncHandler(async (req, res) => {
 
   // Flat delivery fee for simplicity (could be distance-based later)
   const deliveryFee = 50;
-  const totalPrice = subtotal + deliveryFee;
+
+  // ----- COUPON REDEMPTION -----
+  // We attempt the redemption HERE (atomically) and apply the discount
+  // to the total. The amount we then verify against Stripe/PayPal is
+  // already the discounted total, so the client cannot pay the
+  // pre-discount amount and then claim the post-discount total.
+  //
+  // tryRedeemCoupon returns:
+  //   { ok: false, reason: string }   — coupon missing/expired/used-up/etc
+  //   { ok: true, discount, code }    — atomic increment succeeded
+  //
+  // If the client sent a coupon code and it's invalid, we treat that
+  // as a hard error — better to reject the order than to silently
+  // drop the discount. The UI already showed a preview via
+  // /api/coupons/validate, so a sudden "coupon invalid" at place-order
+  // time means the coupon expired/ran-out between preview and submit.
+  let appliedCoupon = null;
+  if (couponCode && String(couponCode).trim()) {
+    const redemption = await tryRedeemCoupon({
+      rawCode: couponCode,
+      userId: req.user._id,
+      subtotal,
+    });
+
+    if (!redemption.ok) {
+      // Rollback: nothing was actually decremented (tryRedeemCoupon is
+      // atomic — either it incremented or it didn't), so there's no
+      // state to undo. Just tell the client why the order was refused.
+      throw new ApiError(400, `Coupon not applied: ${redemption.reason}`);
+    }
+
+    appliedCoupon = {
+      code: redemption.code,
+      discount: redemption.discount,
+    };
+  }
+
+  // Apply discount AFTER coupon redemption. We deliberately do NOT
+  // let the discount make the order negative — cap at subtotal + deliveryFee.
+  const discount = appliedCoupon ? appliedCoupon.discount : 0;
+  const totalPrice = Math.max(0, subtotal + deliveryFee - discount);
 
   // Validate optional paymentStatus (must be in the enum). Cash on delivery can
   // omit it (defaults to "pending"); card/wallet send "paid" to mark as already settled.
@@ -181,6 +223,11 @@ export const placeOrder = asyncHandler(async (req, res) => {
     deliveryAddress,
     status: "placed",
     paymentStatus: finalPaymentStatus,
+    // Coupon snapshot — see comment on the order model. Both fields
+    // are denormalized so historical orders stay readable even if
+    // the coupon is later edited or deleted.
+    couponCode: appliedCoupon ? appliedCoupon.code : null,
+    couponDiscount: appliedCoupon ? appliedCoupon.discount : 0,
     // Payment processor linkage — exactly one of these is populated
     // depending on paymentMethod. "cash" orders leave them all empty.
     paymentMethod: paymentMethod || "cash",

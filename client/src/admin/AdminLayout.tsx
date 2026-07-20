@@ -25,6 +25,7 @@ import {
   LogOut,
   ChevronRight,
   Users,
+  Tag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
@@ -40,6 +41,7 @@ const sidebarLinks = [
   { label: "Restaurants", to: "/admin/restaurant", icon: Store },
   { label: "Menu Items", to: "/admin/menu",     icon: Utensils },
   { label: "Users",      to: "/admin/users",    icon: Users },
+  { label: "Coupons",    to: "/admin/coupons",  icon: Tag },
 ];
 
 const AdminLayout = () => {

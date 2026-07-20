@@ -91,6 +91,14 @@ export interface Order {
   riderRating?: number;          // 1-5
   riderReviewComment?: string;   // optional text
   riderReviewedAt?: string;      // ISO date
+  // ----- Coupon / promo code (denormalized snapshot) -----
+  // Set when the order was placed with a valid coupon. The server
+  // stores BOTH the code AND the Rupee discount that was applied,
+  // so the historical order stays readable even if the coupon is
+  // later edited or deleted by an admin. `couponCode` is null
+  // when no coupon was used.
+  couponCode?: string | null;
+  couponDiscount?: number;
   createdAt: string;
   updatedAt: string;
 }

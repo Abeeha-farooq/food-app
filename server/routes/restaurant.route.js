@@ -2,6 +2,7 @@
 import express from "express";
 import {
   getRestaurants,
+  suggestRestaurants,
   getRestaurantById,
   getRestaurantMenu,
   createRestaurant,
@@ -17,6 +18,10 @@ const router = express.Router();
 
 // ---- PUBLIC ----
 router.get("/", getRestaurants);
+// IMPORTANT: /suggest is mounted BEFORE /:id so "suggest" isn't
+// matched as an ObjectId parameter. Express matches in declaration
+// order, and a literal-segment path always wins over a parameter.
+router.get("/suggest", suggestRestaurants);
 router.get("/:id", getRestaurantById);
 router.get("/:id/menu", getRestaurantMenu);
 

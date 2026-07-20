@@ -35,6 +35,12 @@ import OrdersPage from './admin/OrdersPage'
 import RestaurantManagement from './admin/RestaurantManagement'
 import MenuManagement from './admin/MenuManagement'
 import UserManagement from './admin/UserManagement'
+import CouponManagement from './admin/CouponManagement'
+
+// Global modals — mounted at the top of the router tree so
+// they can pop up from any page (e.g. the CartConflictModal
+// fires from any "Add to cart" button across the app).
+import { CartConflictModal } from './components/ui/CartConflictModal'
 
 const appRouter = createBrowserRouter([
   {
@@ -83,13 +89,22 @@ const appRouter = createBrowserRouter([
       { path: "restaurant", element: <RestaurantManagement /> },
       { path: "menu",       element: <MenuManagement /> },
       { path: "users",      element: <UserManagement /> },
+      { path: "coupons",    element: <CouponManagement /> },
     ],
   },
 ])
 
 const App = () => {
   return (
-    <RouterProvider router={appRouter} />
+    <>
+      <RouterProvider router={appRouter} />
+      {/* Global modals — render alongside the router so they're
+          available on every route. They read state from their
+          own contexts and return null when nothing to show, so
+          there's no visual cost when the user isn't triggering
+          them. */}
+      <CartConflictModal />
+    </>
   )
 }
 
