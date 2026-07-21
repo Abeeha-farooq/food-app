@@ -309,14 +309,32 @@ export const createSafepayCheckout = asyncHandler(async (req, res) => {
   // (we don't have a Safepay webhook configured, so the success
   // page is the only way to update the order's paymentStatus).
   const baseUrl = process.env.SF_BASE_URL || "http://localhost:5173";
+  // CRITICAL: redirect_url and cancel_url MUST be plain paths with no
+  // query string. If we embed `?tracker=...&orderId=...` in the URL,
+  // Safepay's redirect behavior appends its own echoed params using
+  // `?` as the separator (instead of `&`), producing a malformed
+  // query string like:
+  //   /success?tracker=...&orderId=<id>?order_id=<id>&tracker=...
+  // The browser then treats everything after the first `?` as the
+  // query string, and the `orderId` value captured by
+  // `searchParams.get("orderId")` becomes a 58-char mess like
+  // "6a5f06a26ed54f66dbcb2455?order_id=6a5f06a26ed54f66dbcb2455",
+  // which fails our `isValidObjectId` check on the server.
+  //
+  // Fix: pass tracker + orderId as separate Safepay params at the
+  // top level. Safepay echoes them back to the success URL with a
+  // proper `&` separator (since the URL has no pre-existing query
+  // string for it to corrupt). The success page reads them from the
+  // URL params directly — see `searchParams.get("order_id")` in
+  // PaymentSuccessPage.tsx.
   const params = new URLSearchParams({
     tbt: userToken,
     tracker,
     order_id: orderId,
     environment: SF_MODE,
     source: "hosted",
-    redirect_url: `${baseUrl}/payment/safepay/success?tracker=${encodeURIComponent(tracker)}&orderId=${encodeURIComponent(orderId)}`,
-    cancel_url: `${baseUrl}/payment/safepay/cancel?tracker=${encodeURIComponent(tracker)}&orderId=${encodeURIComponent(orderId)}`,
+    redirect_url: `${baseUrl}/payment/safepay/success`,
+    cancel_url: `${baseUrl}/payment/safepay/cancel`,
   });
   const redirectUrl = `${SF_API}/embedded/?${params.toString()}`;
 
