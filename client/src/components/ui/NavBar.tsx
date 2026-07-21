@@ -311,6 +311,10 @@ const MobileNavbar = ({
                 <SheetDescription>Navigate the app</SheetDescription>
 
                 {/* Main links (Home, Restaurants/Profile/Orders, Dashboard for admin) */}
+                {/* Every Link is wrapped in <SheetClose asChild> so clicking
+                    it both navigates AND closes the side menu. Without
+                    SheetClose, Radix's <Sheet> stays open after navigation
+                    and you have to manually tap the close button. */}
                 <div className="flex flex-col gap-4 mt-4">
                     {navLinks.map((link) => {
                         const Icon = link.icon;
@@ -323,38 +327,42 @@ const MobileNavbar = ({
                                         {link.label}
                                     </div>
                                     {link.dropdown.map((sub) => (
-                                        <Link
-                                            key={sub.to}
-                                            to={sub.to}
-                                            className="pl-10 py-1.5 text-sm hover:text-gray-200"
-                                        >
-                                            {sub.label}
-                                        </Link>
+                                        <SheetClose asChild key={sub.to}>
+                                            <Link
+                                                to={sub.to}
+                                                className="pl-10 py-1.5 text-sm hover:text-gray-200"
+                                            >
+                                                {sub.label}
+                                            </Link>
+                                        </SheetClose>
                                     ))}
                                 </div>
                             );
                         }
                         return (
-                            <Link
-                                key={link.to}
-                                to={link.to}
-                                className="flex items-center gap-4 px-3 py-2 rounded-lg font-medium hover:text-gray-200"
-                            >
-                                {Icon && <Icon className="w-5 h-5" />}
-                                <span>{link.label}</span>
-                            </Link>
+                            <SheetClose asChild key={link.to}>
+                                <Link
+                                    to={link.to}
+                                    className="flex items-center gap-4 px-3 py-2 rounded-lg font-medium hover:text-gray-200"
+                                >
+                                    {Icon && <Icon className="w-5 h-5" />}
+                                    <span>{link.label}</span>
+                                </Link>
+                            </SheetClose>
                         );
                     })}
 
                     {/* Cart link — only for logged-in regular users, not admins or guests */}
                     {isAuthenticated && !isAdmin && (
-                        <Link
-                            to="/cart"
-                            className="flex items-center gap-4 px-3 py-2 rounded-lg font-medium hover:text-gray-200"
-                        >
-                            <ShoppingCart className="w-5 h-5" />
-                            <span>Cart{totalItems > 0 ? ` (${totalItems})` : ""}</span>
-                        </Link>
+                        <SheetClose asChild>
+                            <Link
+                                to="/cart"
+                                className="flex items-center gap-4 px-3 py-2 rounded-lg font-medium hover:text-gray-200"
+                            >
+                                <ShoppingCart className="w-5 h-5" />
+                                <span>Cart{totalItems > 0 ? ` (${totalItems})` : ""}</span>
+                            </Link>
+                        </SheetClose>
                     )}
                 </div>
 
