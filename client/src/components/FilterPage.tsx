@@ -29,7 +29,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Utensils, DollarSign, SlidersHorizontal, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
+// (The shadcn Card component was removed — we use a plain <div>
+// with explicit flex layout so the body can scroll independently
+// when the sidebar is too short. See the main return statement
+// for details.)
 
 const cuisineOptions = ["Desi", "Pizza", "Burger", "Starter", "Dessert", "Drinks"];
 const priceRanges = ["Low", "Medium", "High"];
@@ -89,23 +92,22 @@ const FilterPage = ({
   };
 
   return (
-    <Card
-      // Responsive card:
-      //   - radius: rounded-xl (mobile) → sm:rounded-2xl (desktop)
-      //   - shadow: shadow-sm → sm:shadow
-      //
-      // h-full + flex flex-col: the card fills the entire height of
-      // its parent (the <aside> in SearchPage). The header and
-      // footer stay pinned (flex-shrink-0); the CardContent body
-      // is set to flex-1 overflow-y-auto below so it scrolls when
-      // the content exceeds the available height. This is the fix
-      // for the "High" price option getting clipped when filter
-      // badges appear above and shrink the sidebar.
+    // ============== Card ==============
+    // We replaced the shadcn <Card> with a plain <div> here because
+    // the shadcn CardHeader has `flex flex-col` and CardContent has
+    // `p-6 pt-0` baked in — those default classes fight against the
+    // `flex-1 min-h-0 overflow-y-auto` layout we need to make the
+    // body scrollable when filter badges above shrink the sidebar.
+    // A plain div gives us full control:
+    //   - h-full + flex flex-col: fill the <aside> height
+    //   - header & footer are flex-shrink-0 (pinned)
+    //   - body is flex-1 min-h-0 overflow-y-auto (scrollable)
+    <div
       className={cn(
         "border border-gray-200 bg-white",
         "rounded-xl sm:rounded-2xl",
         "shadow-sm sm:shadow",
-        "h-full flex flex-col"
+        "h-full flex flex-col overflow-hidden"
       )}
     >
       {/* ============== Header ==============
@@ -114,7 +116,7 @@ const FilterPage = ({
           overflowing. Combined with the tighter row + section padding
           below, the filter card shrinks from ~640px to ~480px tall,
           which fits comfortably in 1280x800+ viewports. */}
-      <CardHeader className="flex-shrink-0 px-5 sm:px-6 py-3 border-b border-gray-100">
+      <div className="flex-shrink-0 px-5 sm:px-6 py-3 border-b border-gray-100">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-base sm:text-lg font-bold text-gray-900 flex items-center gap-2">
             <SlidersHorizontal className="w-4 h-4 text-orange-500" />
@@ -126,7 +128,7 @@ const FilterPage = ({
             </span>
           )}
         </div>
-      </CardHeader>
+      </div>
 
       {/* ============== Body ==============
           flex-1 + overflow-y-auto: the body takes whatever vertical
@@ -136,7 +138,7 @@ const FilterPage = ({
           (e.g. "High" under Price range) from being clipped when
           active-filter badges above steal vertical space from the
           sidebar. */}
-      <CardContent className="flex-1 min-h-0 overflow-y-auto p-0">
+      <div className="flex-1 min-h-0 overflow-y-auto p-0">
         {/* ----- Cuisine section ----- */}
         <FilterSection
           icon={<Utensils className="w-3.5 h-3.5" />}
@@ -182,14 +184,14 @@ const FilterPage = ({
             })}
           </div>
         </FilterSection>
-      </CardContent>
+      </div>
 
       {/* ============== Footer (only when filters are active) ==============
           flex-shrink-0 so the Reset button always stays pinned at the
           bottom of the card and isn't pushed off-screen by the
           scrolling body. */}
       {hasActive && (
-        <CardFooter className="flex-shrink-0 px-5 sm:px-6 py-2 border-t border-gray-100 sm:border-gray-200 bg-gray-50/50">
+        <div className="flex-shrink-0 px-5 sm:px-6 py-2 border-t border-gray-100 sm:border-gray-200 bg-gray-50/50">
           <button
             type="button"
             onClick={handleReset}
@@ -203,9 +205,9 @@ const FilterPage = ({
             <RotateCcw className="w-3.5 h-3.5" />
             Reset filters
           </button>
-        </CardFooter>
+        </div>
       )}
-    </Card>
+    </div>
   );
 };
 
