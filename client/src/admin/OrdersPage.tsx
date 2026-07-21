@@ -22,10 +22,16 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { PageHeader } from "@/components/ui/page-header";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   OrderStatusBadge,
   PaymentStatusBadge,
 } from "@/components/ui/status-badge";
-import { Loader2, Search, X, ChevronRight, Calendar, User, Store, MapPin, DollarSign, ShoppingBag, Clock, CheckCircle2, Truck, Inbox, Bike, Phone, Star, UserPlus, UserMinus, AlertTriangle, XCircle } from "lucide-react";
+import { Loader2, Search, X, ChevronRight, ChevronDown, Calendar, User, Store, MapPin, DollarSign, ShoppingBag, Clock, CheckCircle2, Truck, Inbox, Bike, Phone, Star, UserPlus, UserMinus, AlertTriangle, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import api, { getErrorMessage } from "@/lib/api";
 import { useAuth } from "@/context/useAuth";
@@ -660,18 +666,16 @@ const OrderDetailModal = ({
         {/* Body */}
         <div className="p-6 space-y-4">
           {/* ====== ORDER STATUS row ======
-              The badge sits on its own line, and the status update
-              select sits on a SEPARATE line below the badge.
-
-              Why a separate line? The browser's native <select>
-              dropdown is a system-level overlay — it floats above
-              page content and ignores CSS positioning / overflow
-              / z-index. When the dropdown sits next to the badge
-              (one row), the 4-7 status options open downward and
-              visually cover the Accept/Reject buttons, the payment
-              status row, and the Assign Rider button. By putting
-              the select on its own line, the dropdown opens into
-              empty space instead of covering important UI. */}
+              Custom Radix DropdownMenu instead of native <select>.
+              Why: the native <select> opens a system-level overlay
+              that ignores CSS positioning, z-index, and overflow.
+              It can extend past the modal's right edge and visually
+              cover the order rows behind the modal (as shown in
+              the bug report screenshot). The Radix DropdownMenu is
+              a normal React-rendered panel that respects the modal's
+              z-index, stays inside the modal, and can be styled
+              cleanly. The hidden "Cancel" option (current status)
+              keeps the dropdown from allowing a no-op selection. */}
           <div className="p-4 bg-gray-50 rounded-lg space-y-3">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-gray-500">Order status:</span>
@@ -686,19 +690,46 @@ const OrderDetailModal = ({
                 <span className="text-sm text-gray-500">Update to:</span>
                 {/* The status dropdown is hidden when the order is in
                     "placed" — the dedicated Accept / Reject buttons
-                    below are the right action for that state. For
-                    all other statuses, the admin can manually
-                    transition. */}
-                <select
-                  value={order.status}
-                  disabled={updating}
-                  onChange={(e) => onUpdateStatus(order._id, e.target.value as OrderStatus)}
-                  className="flex-1 sm:flex-none border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-50"
-                >
-                  {ADMIN_SETTABLE_STATUSES.map((value) => (
-                    <option key={value} value={value}>{STATUS_LABELS[value]}</option>
-                  ))}
-                </select>
+                    below are the right action for that state. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={updating}
+                      className="flex-1 sm:flex-none justify-between min-w-[180px] border-gray-300 bg-white"
+                    >
+                      <span>{STATUS_LABELS[order.status]}</span>
+                      <ChevronDown className="w-4 h-4 ml-2 opacity-60" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    // align="end" puts the panel under the trigger's right
+                    // edge, which keeps it inside the modal's right padding
+                    // on narrow viewports. sideOffset=4 adds a small gap.
+                    align="start"
+                    sideOffset={4}
+                    // Constrain the panel so it can't grow taller than
+                    // the modal's content area and stay inside it.
+                    className="min-w-[var(--radix-dropdown-menu-trigger-width)] max-h-60"
+                  >
+                    {ADMIN_SETTABLE_STATUSES.filter((v) => v !== order.status).map((value) => (
+                      <DropdownMenuItem
+                        key={value}
+                        onSelect={() => onUpdateStatus(order._id, value)}
+                        className="cursor-pointer"
+                      >
+                        {/* Small status pill that mirrors the badge
+                            styling in the row above, so the dropdown
+                            items visually match the current status
+                            indicators the admin already knows. */}
+                        <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded border mr-2 ${STATUS_COLORS[value]}`}>
+                          {STATUS_LABELS[value]}
+                        </span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 {updating && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
               </div>
             )}
@@ -758,12 +789,10 @@ const OrderDetailModal = ({
           )}
 
           {/* ====== PAYMENT STATUS row (separate from order status) ======
-              Same layout pattern as the order status row above: the
-              payment badge sits on its own line, and the update
-              select sits on a SEPARATE line below. This keeps the
-              native dropdown's overlay from covering the Accept /
-              Reject buttons, the order status select, and the
-              Assign Rider button further down. */}
+              Same Radix DropdownMenu pattern as the order status row.
+              Custom panel (not native <select>) so the dropdown stays
+              inside the modal and doesn't visually leak past the
+              modal's right edge. */}
           <div className="p-4 bg-gray-50 rounded-lg space-y-3">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-gray-500">Payment:</span>
@@ -776,16 +805,38 @@ const OrderDetailModal = ({
             {canEdit && (
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm text-gray-500">Update to:</span>
-                <select
-                  value={order.paymentStatus}
-                  disabled={updating}
-                  onChange={(e) => onUpdatePaymentStatus(order._id, e.target.value as PaymentStatus)}
-                  className="flex-1 sm:flex-none border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-50"
-                >
-                  {Object.entries(PAYMENT_STATUS_LABELS).map(([value, label]) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </select>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={updating}
+                      className="flex-1 sm:flex-none justify-between min-w-[160px] border-gray-300 bg-white"
+                    >
+                      <span>{PAYMENT_STATUS_LABELS[order.paymentStatus]}</span>
+                      <ChevronDown className="w-4 h-4 ml-2 opacity-60" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="start"
+                    sideOffset={4}
+                    className="min-w-[var(--radix-dropdown-menu-trigger-width)] max-h-60"
+                  >
+                    {Object.entries(PAYMENT_STATUS_LABELS)
+                      .filter(([value]) => value !== order.paymentStatus)
+                      .map(([value, label]) => (
+                        <DropdownMenuItem
+                          key={value}
+                          onSelect={() => onUpdatePaymentStatus(order._id, value as PaymentStatus)}
+                          className="cursor-pointer"
+                        >
+                          <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded border mr-2 ${PAYMENT_STATUS_COLORS[value as PaymentStatus]}`}>
+                            {label}
+                          </span>
+                        </DropdownMenuItem>
+                      ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 {updating && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
               </div>
             )}
