@@ -40,7 +40,6 @@ import {
 } from "@radix-ui/react-avatar";
 import {
     Sheet,
-    SheetClose,
     SheetContent,
     SheetDescription,
     SheetHeader,
@@ -59,7 +58,7 @@ import { type User as AuthUser } from "@/context/auth-types";
 // one place to maintain.
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useCart } from "@/context/useCart";
-import { useState, type ComponentType } from "react";
+import { useState, type ComponentType, type MouseEvent } from "react";
 
 // ============================================================
 // TYPES
@@ -281,6 +280,18 @@ export default NavBar;
 // ============================================================
 // MOBILE MENU (the slide-out from the right)
 // ============================================================
+// MOBILE MENU (the slide-out from the right)
+// ============================================================
+// Implementation note:
+// The Sheet is CONTROLLED here (we own the `open` state) instead of
+// the default uncontrolled mode. Reason: in uncontrolled mode, each
+// menu <Link> needed to be wrapped in <SheetClose asChild> to close
+// the sheet on click. That pattern is flaky with react-router's
+// <Link> (the click handler order can cause the sheet to stay open).
+// Controlling the state lets us explicitly call setOpen(false) from
+// a single `handleNavigate` helper used by every menu link, so the
+// close behavior is guaranteed regardless of how Radix merges event
+// handlers.
 const MobileNavbar = ({
     navLinks,
     isAuthenticated,
@@ -296,8 +307,25 @@ const MobileNavbar = ({
     user: AuthUser | null;
     onLogout: () => void;
 }) => {
+    const navigate = useNavigate();
+    const [open, setOpen] = useState(false);
+
+    // Single helper used by every menu link: close the sheet, then
+    // navigate. setOpen(false) is called BEFORE navigate() so React
+    // starts the close animation immediately, not after the new
+    // route's component has mounted.
+    const handleNavigate = (to: string) => {
+        setOpen(false);
+        navigate(to);
+    };
+
+    const handleLinkClick = (to: string) => (e: MouseEvent) => {
+        e.preventDefault();
+        handleNavigate(to);
+    };
+}) => {
     return (
-        <Sheet>
+        <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" className="md:hidden">
                     <MenuIcon className="w-6 h-6 rounded-full text-black" />
@@ -311,10 +339,10 @@ const MobileNavbar = ({
                 <SheetDescription>Navigate the app</SheetDescription>
 
                 {/* Main links (Home, Restaurants/Profile/Orders, Dashboard for admin) */}
-                {/* Every Link is wrapped in <SheetClose asChild> so clicking
-                    it both navigates AND closes the side menu. Without
-                    SheetClose, Radix's <Sheet> stays open after navigation
-                    and you have to manually tap the close button. */}
+                {/* Every Link uses handleLinkClick to call setOpen(false) before
+                    navigating — this is the controlled-state pattern. e.preventDefault
+                    + navigate(...) means we own the navigation timing too, so
+                    the sheet close is guaranteed regardless of which event fires first. */}
                 <div className="flex flex-col gap-4 mt-4">
                     {navLinks.map((link) => {
                         const Icon = link.icon;
@@ -327,42 +355,41 @@ const MobileNavbar = ({
                                         {link.label}
                                     </div>
                                     {link.dropdown.map((sub) => (
-                                        <SheetClose asChild key={sub.to}>
-                                            <Link
-                                                to={sub.to}
-                                                className="pl-10 py-1.5 text-sm hover:text-gray-200"
-                                            >
-                                                {sub.label}
-                                            </Link>
-                                        </SheetClose>
+                                        <Link
+                                            key={sub.to}
+                                            to={sub.to}
+                                            onClick={handleLinkClick(sub.to)}
+                                            className="pl-10 py-1.5 text-sm hover:text-gray-200"
+                                        >
+                                            {sub.label}
+                                        </Link>
                                     ))}
                                 </div>
                             );
                         }
                         return (
-                            <SheetClose asChild key={link.to}>
-                                <Link
-                                    to={link.to}
-                                    className="flex items-center gap-4 px-3 py-2 rounded-lg font-medium hover:text-gray-200"
-                                >
-                                    {Icon && <Icon className="w-5 h-5" />}
-                                    <span>{link.label}</span>
-                                </Link>
-                            </SheetClose>
+                            <Link
+                                key={link.to}
+                                to={link.to}
+                                onClick={handleLinkClick(link.to)}
+                                className="flex items-center gap-4 px-3 py-2 rounded-lg font-medium hover:text-gray-200"
+                            >
+                                {Icon && <Icon className="w-5 h-5" />}
+                                <span>{link.label}</span>
+                            </Link>
                         );
                     })}
 
                     {/* Cart link — only for logged-in regular users, not admins or guests */}
                     {isAuthenticated && !isAdmin && (
-                        <SheetClose asChild>
-                            <Link
-                                to="/cart"
-                                className="flex items-center gap-4 px-3 py-2 rounded-lg font-medium hover:text-gray-200"
-                            >
-                                <ShoppingCart className="w-5 h-5" />
-                                <span>Cart{totalItems > 0 ? ` (${totalItems})` : ""}</span>
-                            </Link>
-                        </SheetClose>
+                        <Link
+                            to="/cart"
+                            onClick={handleLinkClick("/cart")}
+                            className="flex items-center gap-4 px-3 py-2 rounded-lg font-medium hover:text-gray-200"
+                        >
+                            <ShoppingCart className="w-5 h-5" />
+                            <span>Cart{totalItems > 0 ? ` (${totalItems})` : ""}</span>
+                        </Link>
                     )}
                 </div>
 
@@ -395,25 +422,35 @@ const MobileNavbar = ({
                         <ThemeToggle />
                     </div>
 
-                    <SheetClose asChild>
-                        {isAuthenticated ? (
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={onLogout}
-                                className="flex justify-center w-full bg-orange hover:bg-hoverOrange"
-                            >
-                                <LogOut className="w-4 h-4 mr-1" />
-                                Logout
+                    {/* Logout / Login button — also uses handleLinkClick so the
+                        sheet closes after the action. Logout also closes the
+                        sheet explicitly (logout doesn't navigate to a new page,
+                        it just clears auth state — the dashboard's auth check
+                        will redirect to login automatically). */}
+                    {isAuthenticated ? (
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                                setOpen(false);
+                                onLogout();
+                            }}
+                            className="flex justify-center w-full bg-orange hover:bg-hoverOrange"
+                        >
+                            <LogOut className="w-4 h-4 mr-1" />
+                            Logout
+                        </Button>
+                    ) : (
+                        <Link
+                            to="/login"
+                            onClick={handleLinkClick("/login")}
+                            className="w-full"
+                        >
+                            <Button type="button" variant="outline" className="w-full bg-orange hover:bg-hoverOrange">
+                                Login
                             </Button>
-                        ) : (
-                            <Link to="/login" className="w-full">
-                                <Button type="button" variant="outline" className="w-full bg-orange hover:bg-hoverOrange">
-                                    Login
-                                </Button>
-                            </Link>
-                        )}
-                    </SheetClose>
+                        </Link>
+                    )}
                 </div>
             </SheetContent>
         </Sheet>
