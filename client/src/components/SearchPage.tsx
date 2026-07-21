@@ -491,8 +491,13 @@ const SearchPage = () => {
               aside is a normal flow element that just sits at the
               top-left. `overflow-hidden` on the aside ensures the
               filter card can't accidentally grow taller than the
-              available height and force a page-level scrollbar. */}
-          <aside className="hidden xl:block w-72 2xl:w-80 min-w-0 overflow-hidden">
+              available height and force a page-level scrollbar.
+              `h-full` lets the FilterPage card inside stretch to
+              the full sidebar height (its body becomes scrollable
+              when the content exceeds that height — this is the
+              fix for the "High" option getting clipped when filter
+              badges above steal vertical space). */}
+          <aside className="hidden xl:block w-72 2xl:w-80 min-w-0 h-full overflow-hidden">
             <FilterPage
               selectedCuisines={selectedCuisines}
               setSelectedCuisines={setSelectedCuisines}

@@ -93,10 +93,19 @@ const FilterPage = ({
       // Responsive card:
       //   - radius: rounded-xl (mobile) → sm:rounded-2xl (desktop)
       //   - shadow: shadow-sm → sm:shadow
+      //
+      // h-full + flex flex-col: the card fills the entire height of
+      // its parent (the <aside> in SearchPage). The header and
+      // footer stay pinned (flex-shrink-0); the CardContent body
+      // is set to flex-1 overflow-y-auto below so it scrolls when
+      // the content exceeds the available height. This is the fix
+      // for the "High" price option getting clipped when filter
+      // badges appear above and shrink the sidebar.
       className={cn(
         "border border-gray-200 bg-white",
         "rounded-xl sm:rounded-2xl",
-        "shadow-sm sm:shadow"
+        "shadow-sm sm:shadow",
+        "h-full flex flex-col"
       )}
     >
       {/* ============== Header ==============
@@ -105,7 +114,7 @@ const FilterPage = ({
           overflowing. Combined with the tighter row + section padding
           below, the filter card shrinks from ~640px to ~480px tall,
           which fits comfortably in 1280x800+ viewports. */}
-      <CardHeader className="px-5 sm:px-6 py-3 border-b border-gray-100">
+      <CardHeader className="flex-shrink-0 px-5 sm:px-6 py-3 border-b border-gray-100">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-base sm:text-lg font-bold text-gray-900 flex items-center gap-2">
             <SlidersHorizontal className="w-4 h-4 text-orange-500" />
@@ -119,8 +128,15 @@ const FilterPage = ({
         </div>
       </CardHeader>
 
-      {/* ============== Body ============== */}
-      <CardContent className="p-0">
+      {/* ============== Body ==============
+          flex-1 + overflow-y-auto: the body takes whatever vertical
+          space is left after the header (and footer, if present),
+          and scrolls internally if the filter sections are taller
+          than the available height. This prevents the bottom options
+          (e.g. "High" under Price range) from being clipped when
+          active-filter badges above steal vertical space from the
+          sidebar. */}
+      <CardContent className="flex-1 min-h-0 overflow-y-auto p-0">
         {/* ----- Cuisine section ----- */}
         <FilterSection
           icon={<Utensils className="w-3.5 h-3.5" />}
@@ -168,9 +184,12 @@ const FilterPage = ({
         </FilterSection>
       </CardContent>
 
-      {/* ============== Footer (only when filters are active) ============== */}
+      {/* ============== Footer (only when filters are active) ==============
+          flex-shrink-0 so the Reset button always stays pinned at the
+          bottom of the card and isn't pushed off-screen by the
+          scrolling body. */}
       {hasActive && (
-        <CardFooter className="px-5 sm:px-6 py-2 border-t border-gray-100 sm:border-gray-200 bg-gray-50/50">
+        <CardFooter className="flex-shrink-0 px-5 sm:px-6 py-2 border-t border-gray-100 sm:border-gray-200 bg-gray-50/50">
           <button
             type="button"
             onClick={handleReset}
