@@ -153,11 +153,16 @@ export const placeOrder = asyncHandler(async (req, res) => {
   // time means the coupon expired/ran-out between preview and submit.
   let appliedCoupon = null;
   if (couponCode && String(couponCode).trim()) {
-    const redemption = await tryRedeemCoupon({
-      rawCode: couponCode,
-      userId: req.user._id,
+    // tryRedeemCoupon takes 3 positional args: (rawCode, userId, subtotal).
+    // (Earlier we passed an object — that got assigned to `rawCode` and
+    // produced the literal string "[object Object]" inside normalizeCode,
+    // which is why every order with a coupon 400'd with "Coupon not found"
+    // even though the validate endpoint found the coupon a second earlier.)
+    const redemption = await tryRedeemCoupon(
+      couponCode,
+      req.user._id,
       subtotal,
-    });
+    );
 
     if (!redemption.ok) {
       // Rollback: nothing was actually decremented (tryRedeemCoupon is
