@@ -27,7 +27,9 @@ export interface AuthContextValue {
   isLoading: boolean;                // true while we're checking "are they logged in?"
   isAuthenticated: boolean;          // convenience flag
 
-  login: (email: string, password: string) => Promise<void>;
+  // Returns the logged-in user so callers can do role-based
+  // redirects (e.g. Login.tsx sends admins to /admin, riders to /rider).
+  login: (email: string, password: string) => Promise<User>;
   signup: (data: { fullname: string; email: string; password: string; contact: string }) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (updates: Partial<User>) => void;  // for profile updates
@@ -43,7 +45,7 @@ export const AuthContext = createContext<AuthContextValue>({
   user: null,
   isLoading: true,
   isAuthenticated: false,
-  login: async () => {},
+  login: async () => ({} as User),
   signup: async () => {},
   logout: async () => {},
   updateUser: () => {},

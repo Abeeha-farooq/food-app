@@ -22,7 +22,7 @@ export interface User {
   fullname: string;
   email: string;
   contact?: string;
-  role: "user" | "admin" | "restaurant_owner";
+  role: "user" | "admin" | "restaurant_owner" | "rider";
   isVerified: boolean;
   profilePicture?: string;
   address?: string;

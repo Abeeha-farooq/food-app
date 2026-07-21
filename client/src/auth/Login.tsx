@@ -69,9 +69,22 @@ const Login = () => {
 
     setLoading(true);
     try {
-      await login(result.data.email, result.data.password);
+      const loggedInUser = await login(result.data.email, result.data.password);
       toast.success("Logged in");
-      navigate(from, { replace: true });
+
+      // Role-based redirect. Riders and admins get sent to their
+      // own dashboards; regular users get the page they were
+      // trying to reach (or the home page). This prevents the
+      // bug where a rider logs in and lands on a regular user
+      // page like /profile or /cart just because that was the
+      // "from" location.
+      if (loggedInUser.role === "admin") {
+        navigate("/admin", { replace: true });
+      } else if (loggedInUser.role === "rider") {
+        navigate("/rider", { replace: true });
+      } else {
+        navigate(from, { replace: true });
+      }
     } catch (err) {
       // AxiosError with 403 + the "verify your email" message → special UX
       const axiosErr = err as { response?: { status?: number; data?: { message?: string } } };

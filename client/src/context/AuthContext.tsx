@@ -75,7 +75,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   // ------------------------------------------------------------
   // LOGIN
   // ------------------------------------------------------------
-  const login = async (email: string, password: string) => {
+  // Returns the logged-in user so callers (Login page) can do
+  // role-based redirects (admin → /admin, rider → /rider, regular
+  // user → the page they were trying to reach or the home page).
+  const login = async (email: string, password: string): Promise<User> => {
     const res = await api.post("/auth/login", { email, password });
     // Backend returns: { _id, fullname, email, role, isVerified, profilePicture, token }
     // We use REST destructuring to pull out the token, and the rest becomes userData.
@@ -83,6 +86,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const { token, ...userData } = res.data.data;
     localStorage.setItem("token", token);   // persist for page refreshes
     setUser(userData as User);
+    return userData as User;
   };
 
   // ------------------------------------------------------------
