@@ -336,18 +336,17 @@ const RiderManagement = () => {
             ] as { value: StatusFilter; label: string }[]
           ).map((opt) => {
             const active = statusFilter === opt.value;
-            // Use a template literal (not string concat with a ternary)
-            // so Tailwind's JIT compiler can statically detect every
-            // class in BOTH branches. The previous form (string + ternary
-            // inside a JSX attribute) was getting `bg-orange-500` purged
-            // from the build for some reason — the active pill rendered
-            // with the orange border (border-orange-500 worked) but a
-            // white background and invisible white text. The template
-            // form makes the class list a single string literal, which
-            // Tailwind's content scanner handles reliably.
+            // The project defines a CUSTOM color `orange: "var(--button)"`
+            // in tailwind.config.js (no shade suffix), so `bg-orange`
+            // maps to the brand orange and `bg-orange-500` does NOT
+            // (it's a default Tailwind shade that may be purged or
+            // overridden by the base button background). Use `bg-orange`
+            // + `border-orange` to match the custom color reliably.
+            // Text is intentionally `text-black` so it's visible even
+            // if the background doesn't apply for any reason.
             const className = `px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
               active
-                ? "bg-orange-500 text-white border-orange-500"
+                ? "bg-orange text-black border-orange"
                 : "bg-white text-gray-700 border-gray-200 hover:border-gray-300"
             }`;
             return (
