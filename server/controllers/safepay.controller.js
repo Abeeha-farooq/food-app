@@ -377,8 +377,9 @@ export const verifySafepayPayment = asyncHandler(async (req, res) => {
   // isn't reaching the endpoint at all (e.g. wrong URL, auth
   // failure, or the success page isn't even mounting).
   console.log(
-    `[Safepay] verify called: orderId=${orderId}, status=${status}, ` +
-    `tracker=${(tracker || "").slice(0, 12)}..., user=${req.user?._id}`
+    `[Safepay] verify called: orderId=${JSON.stringify(orderId)}, status=${status}, ` +
+    `tracker=${(tracker || "").slice(0, 12)}..., user=${req.user?._id}, ` +
+    `body keys=${Object.keys(req.body || {}).join(",")}`
   );
 
   // ----- Input validation -----
@@ -388,12 +389,41 @@ export const verifySafepayPayment = asyncHandler(async (req, res) => {
   if (!["paid", "failed"].includes(status)) {
     throw new ApiError(400, "status must be 'paid' or 'failed'");
   }
+  // Defensive ObjectId validation. The client reads orderId from a URL
+  // query string (searchParams.get), which can be empty or corrupted
+  // if the URL was hand-crafted or got mangled by a redirect. We log
+  // the raw value here so Vercel logs show exactly what came in —
+  // critical for debugging "the order never got marked paid" tickets.
   if (!mongoose.isValidObjectId(orderId)) {
-    throw new ApiError(400, "Invalid orderId");
+    console.error(
+      `[Safepay] verify REJECTED — orderId is not a valid ObjectId. ` +
+      `raw value: ${JSON.stringify(orderId)} (length=${String(orderId).length}), ` +
+      `raw type: ${typeof orderId}, user=${req.user?._id}`
+    );
+    throw new ApiError(
+      400,
+      `Invalid orderId (length=${String(orderId).length}, expected 24-char hex)`
+    );
   }
 
   // ----- Find the order -----
-  const order = await Order.findById(orderId);
+  // Order.findById throws a CastError if orderId isn't a valid ObjectId.
+  // We catch it explicitly so the 400 path has a consistent shape
+  // (the !mongoose.isValidObjectId guard above catches the common case,
+  // but this is the belt-and-suspenders for any edge case where the
+  // orderId somehow passes the guard but Mongoose still rejects it).
+  let order;
+  try {
+    order = await Order.findById(orderId);
+  } catch (err) {
+    if (err && err.name === "CastError") {
+      console.error(
+        `[Safepay] verify — Order.findById CastError for orderId=${JSON.stringify(orderId)}`
+      );
+      throw new ApiError(400, "Invalid orderId format");
+    }
+    throw err;
+  }
   if (!order) throw new ApiError(404, "Order not found");
 
   // ----- Ownership check -----
