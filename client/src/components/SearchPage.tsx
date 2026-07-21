@@ -461,7 +461,7 @@ const SearchPage = () => {
             The two-column body itself uses h-full + grid so each
             child stretches to the full height of the body, then the
             RIGHT child gets overflow-y-auto for the independent scroll. */}
-        <div className="flex-1 overflow-hidden pb-4 md:pb-6 xl:pb-8">
+        <div className="flex-1 overflow-hidden pt-4 md:pt-5 xl:pt-6 pb-4 md:pb-6 xl:pb-8">
         <div
           className={cn(
             // Grid (not flex) for the same reason as before: grid
