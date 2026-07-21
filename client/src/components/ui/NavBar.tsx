@@ -323,7 +323,7 @@ const MobileNavbar = ({
         e.preventDefault();
         handleNavigate(to);
     };
-}) => {
+
     return (
         <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>
