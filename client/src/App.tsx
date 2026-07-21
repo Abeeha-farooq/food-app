@@ -36,6 +36,7 @@ import RestaurantManagement from './admin/RestaurantManagement'
 import MenuManagement from './admin/MenuManagement'
 import UserManagement from './admin/UserManagement'
 import CouponManagement from './admin/CouponManagement'
+import RiderManagement from './admin/RiderManagement'
 
 // Global modals — mounted at the top of the router tree so
 // they can pop up from any page (e.g. the CartConflictModal
@@ -101,6 +102,7 @@ const appRouter = createBrowserRouter([
       { path: "orders",     element: <OrdersPage /> },
       { path: "restaurant", element: <RestaurantManagement /> },
       { path: "menu",       element: <MenuManagement /> },
+      { path: "riders",     element: <RiderManagement /> },
       { path: "users",      element: <UserManagement /> },
       { path: "coupons",    element: <CouponManagement /> },
     ],

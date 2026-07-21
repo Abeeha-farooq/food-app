@@ -25,11 +25,19 @@ import { XCircle, Home, RefreshCw, ShoppingCart, ArrowLeft } from "lucide-react"
 import api from "@/lib/api";
 
 const PaymentFailurePage = () => {
-  // Read ?tracker=<tracker>&orderId=<mongoId> from the URL.
-  // Safepay's cancel path passes both, same as the success path.
+  // Read the payment identifiers from the URL.
+  // Same rationale as PaymentSuccessPage: Safepay echoes back
+  // `order_id` (snake_case) and `tracker` after the cancel. We also
+  // fall back to the camelCase keys in case any old URL is still
+  // floating around. The `sanitizeOrderId` helper at the bottom of
+  // this file strips any malformed suffix (see comment there) so old
+  // in-flight orders still get processed.
   const [searchParams] = useSearchParams();
-  const tracker = searchParams.get("tracker") || "";
-  const orderId = searchParams.get("orderId") || "";
+  const tracker =
+    searchParams.get("tracker") || searchParams.get("tbt") || "";
+  const rawOrderId =
+    searchParams.get("order_id") || searchParams.get("orderId") || "";
+  const orderId = sanitizeOrderId(rawOrderId);
 
   // Verify-on-mount: mark the order as failed. We don't BLOCK the
   // page on this call (unlike the success page) — the user sees
@@ -139,5 +147,25 @@ const PaymentFailurePage = () => {
     </div>
   );
 };
+
+// ============================================================
+// sanitizeOrderId
+// ============================================================
+// Same defensive helper as in PaymentSuccessPage — strips a malformed
+// orderId down to its valid 24-char ObjectId. Older builds embedded
+// `?tracker=...&orderId=...` inside the redirect_url, which caused
+// Safepay to append its own echoed params with `?` instead of `&`,
+// producing a 58-char orderId like:
+//   "6a5f06a26ed54f66dbcb2455?order_id=6a5f06a26ed54f66dbcb2455"
+// We extract just the first 24 hex chars so any in-flight order
+// from BEFORE this fix shipped can still be marked failed (the
+// alternative is the order staying in "pending" forever, which
+// the admin would have to flip manually).
+function sanitizeOrderId(raw: string): string {
+  if (!raw) return "";
+  if (/^[0-9a-f]{24}$/i.test(raw)) return raw;
+  const match = raw.match(/^[0-9a-f]{24}/i);
+  return match ? match[0] : raw;
+}
 
 export default PaymentFailurePage;

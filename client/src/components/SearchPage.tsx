@@ -46,12 +46,14 @@ import {
   X,
   Clock,
   ChevronRight,
+  Utensils,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { SearchBar } from "./ui/SearchBar";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/ui/page-header";
 import axios from "axios";
 import api, { getErrorMessage } from "@/lib/api";
 import { toast } from "sonner";
@@ -251,15 +253,54 @@ const SearchPage = () => {
     <div className="w-full">
       <div
         className={cn(
-          // Outer container — uses the responsive spacing scale.
-          //   - X padding: 16 → 24 → 40 (mobile → sm → lg)
-          //   - Y padding: 24 → 40 → 48 (mobile → md → xl)
-          //   - The lg:py-12 (48px) gives the page a "hero" feel on big screens
-          //     without needing a real hero band.
-          "max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-10",
-          "py-6 md:py-10 xl:py-12"
+          // Outer container — viewport-locked layout.
+          //
+          // Why h-[calc(100vh-4rem)] (= 100vh - 64px navbar):
+          //   The user wants the LEFT filters sidebar to stay fixed
+          //   in place and fit completely within the viewport, while
+          //   the RIGHT side (restaurant cards) scrolls independently.
+          //   The cleanest way to achieve this is to make the page
+          //   wrapper exactly viewport-height (minus the fixed navbar),
+          //   then split it into two flex children:
+          //     - Top area: header + toolbar + active filter badges
+          //       (flex-shrink-0 — never scrolls)
+          //     - Bottom area: the two-column body
+          //       (flex-1 + overflow-hidden — the right column inside
+          //       it gets overflow-y-auto for independent scrolling)
+          //
+          // `flex flex-col` on the inner container turns the page into
+          // a vertical stack: fixed stuff on top, scrollable body below.
+          //
+          // `max-w-[1600px] mx-auto` preserves the original horizontal
+          // centering for wide viewports.
+          //
+          // Padding is now split: `pt-*` on the top area, `pb-*` on the
+          // bottom area, and `px-*` on the wrapper — this lets the
+          // bottom area's overflow-y-auto scrollbar sit flush with the
+          // wrapper's right padding without a phantom gap.
+          "h-[calc(100vh-4rem)]",
+          "max-w-[1600px] mx-auto",
+          "px-4 sm:px-6 lg:px-10",
+          "flex flex-col"
         )}
       >
+
+        {/* ============== Top area: header + toolbar + active badges ==============
+            flex-shrink-0 so this area NEVER collapses — the user can always
+            see their search/sort controls and the active filter chips,
+            even when scrolling deep into the results column. */}
+        <div className="flex-shrink-0 pt-4 md:pt-6 xl:pt-8 space-y-3 md:space-y-4">
+
+        {/* ============== Page header ============== */}
+        <PageHeader
+          icon={<Utensils className="text-orange-500" />}
+          title="Restaurants"
+          subtitle={
+            loading
+              ? "Loading restaurants…"
+              : `Showing ${sortedRestaurants.length} restaurant${sortedRestaurants.length !== 1 ? "s" : ""}${searchTerm ? ` for "${searchTerm}"` : ""}`
+          }
+        />
 
         {/* ============== Toolbar (search + sort + mobile filter) ============== */}
         <div
@@ -270,7 +311,7 @@ const SearchPage = () => {
             //   - mb-5 (20px) on mobile, md:mb-7 (28px) on desktop — more
             //     vertical space below the toolbar on bigger screens.
             "flex flex-col sm:flex-row gap-3 sm:gap-4",
-            "mb-5 md:mb-7"
+            "mb-3 md:mb-4"
           )}
         >
           {/* In-page search — uses the shared <SearchBar> with
@@ -341,7 +382,7 @@ const SearchPage = () => {
 
         {/* ============== Active filter badges ============== */}
         {(selectedCuisines.length > 0 || selectedPrices.length > 0 || searchTerm) && (
-          <div className="flex flex-wrap gap-2 mb-6 md:mb-8">
+          <div className="flex flex-wrap gap-2 mb-3 md:mb-4">
             {searchTerm && (
               <Badge
                 onClick={() => {
@@ -409,20 +450,33 @@ const SearchPage = () => {
           </div>
         )}
 
-        {/* ============== Two-column body ============== */}
+        </div>{/* end of top area (header + toolbar + badges) */}
+
+        {/* ============== Bottom area: two-column body ==============
+            flex-1 + overflow-hidden is the key combo:
+              - flex-1       → fills the remaining viewport height
+                              (after the top area's flex-shrink-0)
+              - overflow-hidden → prevents the bottom area from growing
+                              taller than its allocated space; without
+                              this, the two-column body would push
+                              past the viewport and reintroduce a
+                              page-level scrollbar (the thing we're
+                              trying to eliminate)
+
+            The two-column body itself uses h-full + grid so each
+            child stretches to the full height of the body, then the
+            RIGHT child gets overflow-y-auto for the independent scroll. */}
+        <div className="flex-1 overflow-hidden pb-4 md:pb-6 xl:pb-8">
         <div
           className={cn(
-            // Grid (not flex) for a critical reason: position: sticky on
-            // the filter sidebar needs its containing block to be TALLER
-            // than the sticky element, otherwise there's no scroll
-            // runway for it to stick within.
+            // Grid (not flex) for the same reason as before: grid
+            // items naturally stretch to the row height, which is
+            // exactly what we want for an aside + content layout
+            // where the aside and content must reach the full
+            // available height.
             //
-            // In a flex row, the aside's height depends on `align-items`
-            // (defaults to `stretch`) and can be unreliable across
-            // browsers — especially when combined with `flex-shrink-0`.
-            // In a grid row, grid items NATURALLY stretch to the row
-            // height (the height of the tallest sibling, which is the
-            // results column). No ambiguity, no extra class needed.
+            // h-full + the parent's flex-1 gives us "fill remaining
+            // viewport height below the toolbar".
             //
             // Column sizing:
             //   - mobile: single column (grid-cols-1) — aside is hidden
@@ -433,23 +487,23 @@ const SearchPage = () => {
             // Two-column body gap:
             //   - mobile: 24px (just stack vertically)
             //   - xl+: 32px between filter sidebar and results
-            "grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6 xl:gap-8"
+            "h-full grid grid-cols-1 xl:grid-cols-[auto_1fr] gap-6 xl:gap-8"
           )}
         >
-          {/* Filters — sticky on desktop, drawer on mobile.
-              The FilterPage is now a self-contained Card with its own
-              header, sections, and footer — so we just drop it in.
-              `top-20` (= 5rem = 80px) clears the fixed NavBar
-              (h-16 = 64px) with a 16px breathing-room gap. */}
-          <aside className="hidden xl:block w-72 2xl:w-80 min-w-0">
-            <div className="sticky top-20">
-              <FilterPage
-                selectedCuisines={selectedCuisines}
-                setSelectedCuisines={setSelectedCuisines}
-                selectedPrices={selectedPrices}
-                setSelectedPrices={setSelectedPrices}
-              />
-            </div>
+          {/* Filters — fixed in place on desktop, drawer on mobile.
+              No more `sticky top-20`: the parent grid is now a fixed
+              height (h-full inside the flex-1 container), so the
+              aside is a normal flow element that just sits at the
+              top-left. `overflow-hidden` on the aside ensures the
+              filter card can't accidentally grow taller than the
+              available height and force a page-level scrollbar. */}
+          <aside className="hidden xl:block w-72 2xl:w-80 min-w-0 overflow-hidden">
+            <FilterPage
+              selectedCuisines={selectedCuisines}
+              setSelectedCuisines={setSelectedCuisines}
+              selectedPrices={selectedPrices}
+              setSelectedPrices={setSelectedPrices}
+            />
           </aside>
 
           {/* Mobile filter drawer — uses the FilterPage component inside
@@ -505,13 +559,24 @@ const SearchPage = () => {
             </div>
           )}
 
-          {/* Results — `min-w-0` is still required in grid contexts to
-              allow the inner cards to shrink below their intrinsic
+          {/* Results — this is the ONLY scrollable area on the page.
+              `overflow-y-auto` puts a vertical scrollbar on this
+              column when the cards overflow the available height;
+              the filter sidebar (left) stays put because it's a
+              normal flow element in a fixed-height grid, and the
+              toolbar/header (above) stays put because it's
+              `flex-shrink-0` in the page wrapper.
+
+              `min-w-0` is still required in grid contexts to allow
+              the inner cards to shrink below their intrinsic
               min-content width (otherwise long restaurant names can
-              blow out the column). `flex-1` is no longer needed because
-              the parent grid's `1fr` track already takes the remaining
-              space. */}
-          <div className="min-w-0">
+              blow out the column).
+
+              We add a tiny bit of top padding (pt-1) so the first row
+              of cards doesn't sit flush against the top of the
+              scrollable area — this matches the visual rhythm of the
+              filter card's top padding. */}
+          <div className="min-w-0 overflow-y-auto pt-1">
             {/* Loading skeleton grid — matches the real card shape so the
                 page doesn't jump when data arrives. Grid uses the same
                 responsive spacing scale as the real results grid. */}
@@ -560,6 +625,7 @@ const SearchPage = () => {
             )}
           </div>
         </div>
+        </div>{/* end of bottom area (two-column body) */}
       </div>
     </div>
   );

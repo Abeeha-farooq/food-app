@@ -100,9 +100,12 @@ const FilterPage = ({
       )}
     >
       {/* ============== Header ==============
-          px-5 (mobile) → sm:px-6 (24px) for more breathing room on bigger screens.
-          py-4 → sm:py-5 for slightly taller header on desktop. */}
-      <CardHeader className="px-5 sm:px-6 py-4 sm:py-5 border-b border-gray-100">
+          Compact vertical padding (py-3 instead of py-4 sm:py-5) so the
+          entire filter card fits in the desktop sidebar without
+          overflowing. Combined with the tighter row + section padding
+          below, the filter card shrinks from ~640px to ~480px tall,
+          which fits comfortably in 1280x800+ viewports. */}
+      <CardHeader className="px-5 sm:px-6 py-3 border-b border-gray-100">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-base sm:text-lg font-bold text-gray-900 flex items-center gap-2">
             <SlidersHorizontal className="w-4 h-4 text-orange-500" />
@@ -167,7 +170,7 @@ const FilterPage = ({
 
       {/* ============== Footer (only when filters are active) ============== */}
       {hasActive && (
-        <CardFooter className="px-5 sm:px-6 py-3 sm:py-4 border-t border-gray-100 sm:border-gray-200 bg-gray-50/50">
+        <CardFooter className="px-5 sm:px-6 py-2 border-t border-gray-100 sm:border-gray-200 bg-gray-50/50">
           <button
             type="button"
             onClick={handleReset}
@@ -210,8 +213,8 @@ const FilterSection = ({
   count: number;
   children: React.ReactNode;
 }) => (
-  <section className="px-5 sm:px-6 py-4 sm:py-5">
-    <h3 className="text-[11px] sm:text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 sm:mb-4 flex items-center gap-1.5">
+  <section className="px-5 sm:px-6 py-3">
+    <h3 className="text-[11px] sm:text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
       {icon}
       <span>{title}</span>
       {count > 0 && (
@@ -247,7 +250,7 @@ const FilterRow = ({
   <Label
     className={cn(
       "flex items-center gap-2.5 cursor-pointer rounded-md",
-      "px-2 sm:px-2.5 py-2 sm:py-2.5",
+      "px-2 sm:px-2.5 py-1.5",
       "transition-all duration-150",
       // Hover: subtle orange wash
       "hover:bg-orange-50/60",

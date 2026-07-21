@@ -30,10 +30,33 @@ import api, { getErrorMessage } from "@/lib/api";
 import { toast } from "sonner";
 
 const PaymentSuccessPage = () => {
-  // Read ?tracker=<tracker>&orderId=<mongoId> from the URL.
+  // Read the payment identifiers from the URL.
+  //
+  // Why we read `order_id` (snake_case) as the PRIMARY key, and only
+  // fall back to `orderId` (camelCase):
+  //   When the server creates the Safepay checkout, the redirect_url
+  //   it sends to Safepay is a PLAIN path with no query string
+  //   (see server/controllers/safepay.controller.js — embedding a
+  //   query string in the redirect_url causes Safepay to append its
+  //   own echoed params using `?` instead of `&`, producing a
+  //   malformed query string and a 58-char orderId).
+  //   Safepay then echoes back the top-level `order_id` param with
+  //   a proper `&` separator, so the success URL has `?order_id=...`
+  //   (not `?orderId=...`). We read `order_id` first, with `orderId`
+  //   as a fallback for any old URLs that may still have the old key.
+  //
+  // The `sanitizeOrderId` step below is a belt-and-suspenders for any
+  // old URL still in flight that has the malformed `?`+`order_id=...`
+  // suffix. We defensively extract just the first 24 hex chars if
+  // the value looks longer than a valid ObjectId. This means an
+  // order placed BEFORE this fix shipped can still be verified
+  // successfully once the user lands on the success page.
   const [searchParams] = useSearchParams();
-  const tracker = searchParams.get("tracker") || "";
-  const orderId = searchParams.get("orderId") || "";
+  const tracker =
+    searchParams.get("tracker") || searchParams.get("tbt") || "";
+  const rawOrderId =
+    searchParams.get("order_id") || searchParams.get("orderId") || "";
+  const orderId = sanitizeOrderId(rawOrderId);
 
   // Verification state — we kick off the verify call on mount
   // and wait for the server's response before showing the
@@ -189,5 +212,40 @@ const PaymentSuccessPage = () => {
     </div>
   );
 };
+
+// ============================================================
+// sanitizeOrderId
+// ============================================================
+// Strips a malformed orderId down to its valid 24-char ObjectId.
+//
+// Background: older builds of server/controllers/safepay.controller.js
+// embedded `?tracker=...&orderId=...` inside the redirect_url sent
+// to Safepay. Safepay's redirect behavior then appended its own
+// echoed params with `?` instead of `&`, producing a URL like:
+//   /success?tracker=...&orderId=6a5f06a26ed54f66dbcb2455
+//                     ?order_id=6a5f06a26ed54f66dbcb2455&tracker=...
+// The browser then captures the 58-char string
+// "6a5f06a26ed54f66dbcb2455?order_id=6a5f06a26ed54f66dbcb2455" as
+// the orderId value, which fails server-side ObjectId validation.
+//
+// This helper defensively extracts the first 24 hex chars from a
+// too-long value, so any in-flight order from BEFORE this fix
+// shipped can still be verified once the user lands on the success
+// page (the alternative is showing "Invalid orderId" forever for
+// those orders, which would force the admin to manually flip the
+// status on every single one).
+//
+// For brand-new orders, the value is already 24 chars, so this
+// function is a no-op.
+function sanitizeOrderId(raw: string): string {
+  if (!raw) return "";
+  // Already a clean 24-char ObjectId → return as-is
+  if (/^[0-9a-f]{24}$/i.test(raw)) return raw;
+  // Try to extract the first 24 hex chars from a longer value.
+  // Covers the "?order_id=..." suffix bug AND any other future
+  // mangling Safepay might do.
+  const match = raw.match(/^[0-9a-f]{24}/i);
+  return match ? match[0] : raw;
+}
 
 export default PaymentSuccessPage;
