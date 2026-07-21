@@ -659,9 +659,21 @@ const OrderDetailModal = ({
 
         {/* Body */}
         <div className="p-6 space-y-4">
-          {/* ====== ORDER STATUS row ====== */}
-          <div className="flex flex-col md:flex-row md:items-center gap-3 p-4 bg-gray-50 rounded-lg">
-            <div className="flex items-center gap-2">
+          {/* ====== ORDER STATUS row ======
+              The badge sits on its own line, and the status update
+              select sits on a SEPARATE line below the badge.
+
+              Why a separate line? The browser's native <select>
+              dropdown is a system-level overlay — it floats above
+              page content and ignores CSS positioning / overflow
+              / z-index. When the dropdown sits next to the badge
+              (one row), the 4-7 status options open downward and
+              visually cover the Accept/Reject buttons, the payment
+              status row, and the Assign Rider button. By putting
+              the select on its own line, the dropdown opens into
+              empty space instead of covering important UI. */}
+          <div className="p-4 bg-gray-50 rounded-lg space-y-3">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-gray-500">Order status:</span>
               <span
                 className={`inline-block px-3 py-1 text-sm font-medium rounded-md border ${STATUS_COLORS[order.status]}`}
@@ -670,8 +682,8 @@ const OrderDetailModal = ({
               </span>
             </div>
             {canEdit && !isPlaced && (
-              <div className="md:ml-auto flex items-center gap-2">
-                <span className="text-sm text-gray-500">Update:</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-gray-500">Update to:</span>
                 {/* The status dropdown is hidden when the order is in
                     "placed" — the dedicated Accept / Reject buttons
                     below are the right action for that state. For
@@ -681,7 +693,7 @@ const OrderDetailModal = ({
                   value={order.status}
                   disabled={updating}
                   onChange={(e) => onUpdateStatus(order._id, e.target.value as OrderStatus)}
-                  className="border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-50"
+                  className="flex-1 sm:flex-none border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-50"
                 >
                   {ADMIN_SETTABLE_STATUSES.map((value) => (
                     <option key={value} value={value}>{STATUS_LABELS[value]}</option>
@@ -745,9 +757,15 @@ const OrderDetailModal = ({
             </div>
           )}
 
-          {/* ====== PAYMENT STATUS row (separate from order status) ====== */}
-          <div className="flex flex-col md:flex-row md:items-center gap-3 p-4 bg-gray-50 rounded-lg">
-            <div className="flex items-center gap-2">
+          {/* ====== PAYMENT STATUS row (separate from order status) ======
+              Same layout pattern as the order status row above: the
+              payment badge sits on its own line, and the update
+              select sits on a SEPARATE line below. This keeps the
+              native dropdown's overlay from covering the Accept /
+              Reject buttons, the order status select, and the
+              Assign Rider button further down. */}
+          <div className="p-4 bg-gray-50 rounded-lg space-y-3">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-gray-500">Payment:</span>
               <span
                 className={`inline-block px-3 py-1 text-sm font-medium rounded-md border ${PAYMENT_STATUS_COLORS[order.paymentStatus]}`}
@@ -756,13 +774,13 @@ const OrderDetailModal = ({
               </span>
             </div>
             {canEdit && (
-              <div className="md:ml-auto flex items-center gap-2">
-                <span className="text-sm text-gray-500">Update:</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-gray-500">Update to:</span>
                 <select
                   value={order.paymentStatus}
                   disabled={updating}
                   onChange={(e) => onUpdatePaymentStatus(order._id, e.target.value as PaymentStatus)}
-                  className="border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-50"
+                  className="flex-1 sm:flex-none border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-50"
                 >
                   {Object.entries(PAYMENT_STATUS_LABELS).map(([value, label]) => (
                     <option key={value} value={value}>{label}</option>
