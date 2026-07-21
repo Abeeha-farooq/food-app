@@ -12,6 +12,7 @@ import {
   listUsers,
   blacklistUser,
   unblacklistUser,
+  createRider,
   approveRider,
   rejectRider,
   listAvailableRiders,
@@ -45,15 +46,20 @@ router.post("/users/:id/blacklist", blacklistUser);
 router.post("/users/:id/unblacklist", unblacklistUser);
 
 // ----- Rider management -----
-// POST /api/admin/riders/:id/approve   — flip isApproved to true
-// POST /api/admin/riders/:id/reject    — flip isApproved to false
-// GET  /api/admin/riders/available     — list approved + non-blacklisted
-//                                         riders, sorted by fewest active
-//                                         deliveries (first = suggestion)
+// POST /api/admin/riders              — create a new rider directly
+//                                        (bypasses public signup + OTP;
+//                                        rider is created already-approved)
+// GET  /api/admin/riders/available    — list approved + non-blacklisted
+//                                        riders, sorted by fewest active
+//                                        deliveries (first = suggestion)
+// POST /api/admin/riders/:id/approve  — flip isApproved to true
+// POST /api/admin/riders/:id/reject   — flip isApproved to false
 //
-// The `/available` route is mounted BEFORE the `/:id/...` routes so
-// "available" isn't interpreted as a user ID. Express matches in
-// declaration order, and the literal-segment match wins.
+// The literal-segment routes (`/riders` POST for create, and
+// `/riders/available` GET) are mounted BEFORE the `/:id/...` routes so
+// they aren't interpreted as a user ID. Express matches in declaration
+// order, and literal segments always win over parameters.
+router.post("/riders", createRider);
 router.get("/riders/available", listAvailableRiders);
 router.post("/riders/:id/approve", approveRider);
 router.post("/riders/:id/reject", rejectRider);

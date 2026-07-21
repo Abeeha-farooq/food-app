@@ -243,11 +243,88 @@ export const unblacklistUser = asyncHandler(async (req, res) => {
 // approve before they can log in / be assigned to orders.
 //
 // These endpoints let the admin:
+//   - createRider   — provision a new rider directly from the admin
+//                     panel (bypasses the public signup + email-verification
+//                     flow; rider is created already-approved)
 //   - approveRider  — flip isApproved to true
 //   - rejectRider   — flip isApproved to false (admin can re-approve later)
 //   - listAvailableRiders — show approved, non-blacklisted riders for
 //     the order-assignment dropdown, sorted by "fewest active deliveries"
 //     so the first one is the auto-suggestion.
+
+// POST /api/admin/riders
+// Creates a new rider directly. Unlike the public signup flow, this
+// doesn't require an email-OTP step — the admin is trusted to enter
+// the rider's email correctly. The rider is created with isApproved=true
+// (since the admin is provisioning the account themselves, there's no
+// approval gate to wait for) and isVerified=true (same reason — no
+// pending email verification).
+//
+// Body: { fullname, email, contact, password }
+// Returns: the created User document (without the password field, per
+// the User schema's `select: false` on `password`).
+export const createRider = asyncHandler(async (req, res) => {
+  const { fullname, email, contact, password } = req.body || {};
+
+  // ----- Input validation -----
+  // We trim before checking so whitespace-only inputs are rejected.
+  if (!fullname || typeof fullname !== "string" || !fullname.trim()) {
+    throw new ApiError(400, "Full name is required");
+  }
+  if (!email || typeof email !== "string" || !email.trim()) {
+    throw new ApiError(400, "Email is required");
+  }
+  if (!contact || typeof contact !== "string" || !contact.trim()) {
+    throw new ApiError(400, "Contact number is required");
+  }
+  if (!password || typeof password !== "string" || password.length < 6) {
+    throw new ApiError(400, "Password is required (minimum 6 characters)");
+  }
+
+  // Normalize the email for both the duplicate check and the save —
+  // the User model also lowercases+trims, but doing it here means the
+  // duplicate query is comparing against the same canonical form.
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // ----- Duplicate-email guard -----
+  // We catch this here (not just at the DB unique-index level) so the
+  // admin gets a clean 409 with a useful message instead of the
+  // generic "duplicate key" error Mongoose throws on insert.
+  const existing = await User.findOne({ email: normalizedEmail });
+  if (existing) {
+    throw new ApiError(
+      409,
+      `A user with email "${normalizedEmail}" already exists (role: ${existing.role})`
+    );
+  }
+
+  // ----- Create the rider -----
+  // isApproved=true + isVerified=true because the admin is provisioning
+  // the account directly. There's no "wait for OTP / wait for admin
+  // approval" gate in this flow.
+  //
+  // The User schema's pre-save hook will hash the password before insert
+  // (so we pass it as plain text here — don't pre-hash it).
+  const user = await User.create({
+    fullname: fullname.trim(),
+    email: normalizedEmail,
+    contact: contact.trim(),
+    password,
+    role: "rider",
+    isApproved: true,
+    isVerified: true,
+  });
+
+  // Re-fetch without the password (the schema excludes it by default,
+  // but `User.create` doesn't strip it from the returned doc the way
+  // `findOne` does — being explicit here avoids any chance of
+  // accidentally sending the hash back to the admin).
+  const safe = await User.findById(user._id);
+
+  return res
+    .status(201)
+    .json(new ApiResponse(201, safe, "Rider created successfully"));
+});
 
 // POST /api/admin/riders/:id/approve
 // Approves a pending rider. Idempotent — if already approved, returns
