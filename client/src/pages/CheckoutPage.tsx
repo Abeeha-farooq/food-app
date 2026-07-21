@@ -221,11 +221,14 @@ const CheckoutPage = () => {
         subtotal: totalPrice,
       });
       const data = res.data.data;
-      if (!data.valid) {
-        setCouponError(data.reason || "This coupon is not valid");
-        setAppliedCoupon(null);
-        return;
-      }
+      // The server signals validity via HTTP status: 200 = valid,
+      // 4xx = invalid. The 4xx path is handled by the catch block
+      // (api.post throws on non-2xx and getErrorMessage extracts
+      // the server's reason). The 200 response shape is
+      // { code, description, discountType, discountValue, discount,
+      //   minOrderAmount } — no `valid` field. (Checking
+      // `data.valid` here was always undefined, so the coupon
+      // was being rejected as "not valid" even on success.)
       setAppliedCoupon({
         code: data.code,
         discount: data.discount,

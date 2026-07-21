@@ -295,11 +295,6 @@ const SearchPage = () => {
         <PageHeader
           icon={<Utensils className="text-orange-500" />}
           title="Restaurants"
-          subtitle={
-            loading
-              ? "Loading restaurants…"
-              : `Showing ${sortedRestaurants.length} restaurant${sortedRestaurants.length !== 1 ? "s" : ""}${searchTerm ? ` for "${searchTerm}"` : ""}`
-          }
         />
 
         {/* ============== Toolbar (search + sort + mobile filter) ============== */}
