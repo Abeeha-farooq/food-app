@@ -288,6 +288,34 @@ export const getMyOrders = asyncHandler(async (req, res) => {
   return res.status(200).json(new ApiResponse(200, orders, "Your orders fetched"));
 });
 
+// ============================================================
+// GET /api/orders/rider/me — list orders assigned to the current rider
+// ============================================================
+// Used by the rider dashboard to show all orders where
+// `order.rider === req.user._id`. We exclude "delivered" and
+// "cancelled" by default and let the rider toggle those tabs
+// client-side (we send ALL assigned orders and the client filters).
+//
+// Why send everything: the dashboard's "Completed" tab needs
+// delivered orders; "Assigned" / "Pending Deliveries" need
+// in-progress ones. The filter happens in the UI.
+//
+// We populate:
+//   - restaurant: name + city + address (rider needs the pickup
+//     location to navigate to the kitchen)
+//   - user: fullname + contact (rider needs to call the customer
+//     on delivery and confirm the drop-off)
+export const getRiderOrders = asyncHandler(async (req, res) => {
+  const orders = await Order.find({ rider: req.user._id })
+    .sort({ createdAt: -1 })
+    .populate("restaurant", "name city address imageUrl")
+    .populate("user", "fullname contact");
+
+  return res.status(200).json(
+    new ApiResponse(200, orders, "Rider orders fetched")
+  );
+});
+
 // GET /api/orders/:id — single order detail
 export const getOrderById = asyncHandler(async (req, res) => {
   const order = await Order.findById(req.params.id)
@@ -348,6 +376,24 @@ export const updateOrderStatus = asyncHandler(async (req, res) => {
   // Find first (we need the current state to decide whether to snapshot).
   const existing = await Order.findById(req.params.id);
   if (!existing) throw new ApiError(404, "Order not found");
+
+  // ----- Rider restriction -----
+  // Riders can only update orders assigned to THEM, and only to
+  // statuses in the delivery flow. They cannot put orders back to
+  // "placed"/"confirmed"/"preparing" (that's the kitchen's job)
+  // and they cannot cancel orders (that's the admin's job).
+  if (req.user.role === "rider") {
+    if (existing.rider?.toString() !== req.user._id.toString()) {
+      throw new ApiError(403, "This order is not assigned to you");
+    }
+    const riderAllowed = ["out_for_delivery", "delivered"];
+    if (!riderAllowed.includes(status)) {
+      throw new ApiError(
+        403,
+        `Riders can only mark orders as "Picked up" (out_for_delivery) or "Delivered". Got: "${status}"`
+      );
+    }
+  }
 
   // Build the update payload. Default = just the new status.
   const update = { status };
@@ -711,4 +757,54 @@ export const assignRider = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .json(new ApiResponse(200, updated, "Rider assigned successfully"));
+});
+
+// ============================================================
+// PATCH /api/orders/:id/rider-accept
+// ============================================================
+// The assigned rider clicks "Accept Order" in their dashboard to
+// acknowledge they're taking the assignment. Sets `riderAcceptedAt`
+// to now. Idempotent — re-accepting is a no-op (doesn't update the
+// timestamp).
+//
+// Auth: any logged-in user with role="rider" can call this, but
+// the order must be assigned to them. Other roles get 403.
+//
+// Why a dedicated endpoint (instead of just using the generic
+// status update)? Acceptance is independent of the order status —
+// the rider can accept the assignment while the kitchen is still
+// preparing the food. The kitchen's status transitions ("placed"
+// → "confirmed" → "preparing") and the rider's flow ("accept"
+// → "picked up" → "delivered") happen in parallel.
+export const riderAcceptOrder = asyncHandler(async (req, res) => {
+  if (req.user.role !== "rider") {
+    throw new ApiError(403, "Only riders can accept an order");
+  }
+
+  const order = await Order.findById(req.params.id);
+  if (!order) throw new ApiError(404, "Order not found");
+
+  if (!order.rider || order.rider.toString() !== req.user._id.toString()) {
+    throw new ApiError(403, "This order is not assigned to you");
+  }
+
+  // Idempotent: if already accepted, just return the current order.
+  if (order.riderAcceptedAt) {
+    const same = await Order.findById(order._id)
+      .populate("restaurant", "name city address imageUrl")
+      .populate("user", "fullname contact");
+    return res
+      .status(200)
+      .json(new ApiResponse(200, same, "Order already accepted"));
+  }
+
+  order.riderAcceptedAt = new Date();
+  await order.save();
+
+  const updated = await Order.findById(order._id)
+    .populate("restaurant", "name city address imageUrl")
+    .populate("user", "fullname contact");
+  return res
+    .status(200)
+    .json(new ApiResponse(200, updated, "Order accepted"));
 });

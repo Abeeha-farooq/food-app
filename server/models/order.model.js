@@ -106,6 +106,16 @@ const orderSchema = new mongoose.Schema(
       ref: "User",
       default: null,
     },
+    // ----- Rider acknowledgement -----
+    // Set when the assigned rider clicks "Accept Order" in their
+    // dashboard. Independent of the order's `status` — the rider
+    // acknowledges the assignment before the kitchen hands the food
+    // over. Used by the rider UI to show "Accepted" vs "New
+    // assignment" badges.
+    riderAcceptedAt: {
+      type: Date,
+      default: null,
+    },
 
     // ----- Rider snapshot (frozen at delivery time) -----
     // The `rider` field above is a live ObjectId reference — if the

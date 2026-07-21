@@ -11,6 +11,8 @@ import {
   assignRider,
   acceptOrder,
   rejectOrder,
+  getRiderOrders,
+  riderAcceptOrder,
 } from "../controllers/order.controller.js";
 import { verifyJWT, requireRole } from "../middlewares/auth.middleware.js";
 
@@ -23,6 +25,21 @@ router.post("/", placeOrder);
 router.get("/my", getMyOrders);
 router.get("/:id", getOrderById);
 
+// ============================================================
+// RIDER ROUTES
+// ============================================================
+// GET /rider/me — list the current rider's assigned orders.
+// We mount this BEFORE the "/:id" route so the literal "rider/me"
+// path is matched first (otherwise Express would treat "rider" as
+// an order id and 404).
+router.get("/rider/me", requireRole("rider"), getRiderOrders);
+
+// Rider-only status transitions + the dedicated accept endpoint.
+// Riders can only update their own orders to "out_for_delivery"
+// or "delivered" (enforced in the controller).
+router.patch("/:id/rider-accept", requireRole("rider"), riderAcceptOrder);
+router.patch("/:id/status",        requireRole("admin", "restaurant_owner", "rider"), updateOrderStatus);
+
 // Submit a review for a delivered order.
 // Any logged-in user can hit this — the controller enforces that the order
 // belongs to the caller and is in "delivered" status. We mount this BEFORE
@@ -31,7 +48,6 @@ router.patch("/:id/review", submitReview);
 
 // Admin-only routes
 router.get("/", requireRole("admin"), getAllOrders);
-router.patch("/:id/status",   requireRole("admin", "restaurant_owner"), updateOrderStatus);
 router.patch("/:id/payment", requireRole("admin", "restaurant_owner"), updateOrderPayment);
 
 // Accept / reject the initial order (admin-only).
