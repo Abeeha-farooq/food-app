@@ -32,6 +32,7 @@ import {
     Utensils,
     LayoutDashboard,
     LogOut,
+    Bike,
 } from "lucide-react";
 import {
     Avatar,
@@ -78,7 +79,7 @@ interface NavLink {
 // ============================================================
 // To change the menu, edit this function. Both desktop and mobile
 // versions pull from this single source of truth.
-const getNavLinks = (isAuthenticated: boolean, isAdmin: boolean): NavLink[] => {
+const getNavLinks = (isAuthenticated: boolean, isAdmin: boolean, userRole?: string): NavLink[] => {
     // Everyone (including guests) sees the Home link
     const baseLinks: NavLink[] = [
         { label: "Home", to: "/" },
@@ -100,6 +101,19 @@ const getNavLinks = (isAuthenticated: boolean, isAdmin: boolean): NavLink[] => {
             ...baseLinks,
             { label: "Dashboard", to: "/admin", icon: LayoutDashboard },
             { label: "Profile",   to: "/profile", icon: User },
+        ];
+    }
+
+    // ==================== LOGGED-IN RIDER VIEW ====================
+    // Riders get a single "Rider Mode" link to the rider dashboard
+    // at /rider. The rider dashboard has its own sidebar with the
+    // rest of the rider-specific navigation (My Deliveries etc.),
+    // so the top nav stays minimal — same approach as the admin.
+    if (userRole === "rider") {
+        return [
+            ...baseLinks,
+            { label: "Rider Mode", to: "/rider", icon: Bike },
+            { label: "Profile",    to: "/profile", icon: User },
         ];
     }
 
@@ -125,7 +139,7 @@ const NavBar = () => {
     // ----- Role detection -----
     // If not logged in, treat as a non-admin (guest) so the login button shows
     const isAdmin = isAuthenticated && user?.role === "admin";
-    const navLinks = getNavLinks(isAuthenticated, !!isAdmin);
+    const navLinks = getNavLinks(isAuthenticated, !!isAdmin, user?.role);
 
     // ----- Handlers -----
     const handleLogout = async () => {

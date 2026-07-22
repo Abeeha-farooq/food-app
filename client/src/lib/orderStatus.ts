@@ -53,8 +53,14 @@ export interface OrderItem {
 // We type `user` as optional so both views can share this interface.
 export interface Order {
   _id: string;
-  user?: { _id?: string; fullname?: string; email?: string };
-  restaurant: { _id: string; name: string; city?: string; imageUrl?: string };
+  // `user` (customer) is populated differently per endpoint:
+  //   - admin view  → { _id, fullname, email }
+  //   - rider view  → { _id, fullname, contact } (rider needs phone
+  //                    to call the customer on delivery)
+  // All fields are optional because the GET endpoints populate
+  // different subsets.
+  user?: { _id?: string; fullname?: string; email?: string; contact?: string };
+  restaurant: { _id: string; name: string; city?: string; address?: string; imageUrl?: string };
   items: OrderItem[];
   subtotal: number;
   deliveryFee: number;
@@ -80,6 +86,12 @@ export interface Order {
     contact: string | null;
     capturedAt: string | null;   // ISO date
   } | null;
+  // ----- Rider acknowledgement -----
+  // Set when the assigned rider clicks "Accept Order" in their
+  // dashboard. Independent of `status` — the rider can accept
+  // while the kitchen is still preparing the food. `null` if the
+  // rider hasn't acknowledged yet.
+  riderAcceptedAt?: string | null;   // ISO date
   // ----- Review fields (set after the customer rates a delivered order) -----
   // All optional — undefined for orders that haven't been reviewed yet.
   rating?: number;          // 1-5

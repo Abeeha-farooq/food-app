@@ -38,6 +38,11 @@ import UserManagement from './admin/UserManagement'
 import CouponManagement from './admin/CouponManagement'
 import RiderManagement from './admin/RiderManagement'
 
+// Rider pages
+import RiderLayout from './rider/RiderLayout'
+import RiderDashboard from './rider/RiderDashboard'
+import RiderOrders from './rider/RiderOrders'
+
 // Global modals — mounted at the top of the router tree so
 // they can pop up from any page (e.g. the CartConflictModal
 // fires from any "Add to cart" button across the app).
@@ -105,6 +110,26 @@ const appRouter = createBrowserRouter([
       { path: "riders",     element: <RiderManagement /> },
       { path: "users",      element: <UserManagement /> },
       { path: "coupons",    element: <CouponManagement /> },
+    ],
+  },
+  // ============================================================
+  // RIDER ROUTES — all nested under <RiderLayout> for the shared
+  // sidebar + top bar. RoleGuard ensures only riders can reach them.
+  // Admins are intentionally excluded — they manage riders from
+  // the admin panel, not from the rider dashboard.
+  // ============================================================
+  {
+    path: "/rider",
+    element: (
+      <ProtectedRoute>
+        <RoleGuard allow={["rider"]}>
+          <RiderLayout />
+        </RoleGuard>
+      </ProtectedRoute>
+    ),
+    children: [
+      { index: true,        element: <RiderDashboard /> },
+      { path: "orders",     element: <RiderOrders /> },
     ],
   },
 ])

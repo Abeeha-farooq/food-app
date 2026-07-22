@@ -21,7 +21,8 @@ interface Props {
   // Roles that are allowed to see the wrapped content
   // E.g. allow={["admin"]}  → only admins
   //      allow={["admin", "restaurant_owner"]}  → admins OR owners
-  allow: ("user" | "admin" | "restaurant_owner")[];
+  //      allow={["rider"]}  → only riders (for the /rider dashboard)
+  allow: ("user" | "admin" | "restaurant_owner" | "rider")[];
   children: ReactNode;
 }
 
