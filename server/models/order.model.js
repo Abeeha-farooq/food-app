@@ -116,6 +116,26 @@ const orderSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // ----- Rider live location (for active deliveries) -----
+    // The rider's browser reports their GPS position every ~15s
+    // while on an active delivery (status = preparing, confirmed,
+    // or out_for_delivery). The customer's "Track order" map
+    // reads this to show the rider's current position.
+    //
+    // Privacy: location is ONLY stored while the rider is on an
+    // active delivery. Once status reaches "delivered" or
+    // "cancelled", this stays as-is (kept for the customer's
+    // "last known location" display until the page refreshes).
+    // We never request location unless the rider has an active
+    // order — see rider.controller.js updateRiderLocation.
+    riderLocation: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      // Server timestamp of the last location update. Used by
+      // the client to decide if the cached location is "fresh"
+      // (e.g. < 60s old) or stale.
+      updatedAt: { type: Date, default: null },
+    },
 
     // ----- Rider snapshot (frozen at delivery time) -----
     // The `rider` field above is a live ObjectId reference — if the

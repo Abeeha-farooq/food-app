@@ -29,6 +29,7 @@ import orderRoutes from "./routes/order.route.js";
 import adminRoutes from "./routes/admin.route.js";
 import paymentRoutes from "./routes/payment.route.js";
 import couponRoutes from "./routes/coupon.route.js";
+import riderRoutes from "./routes/rider.route.js";
 import ApiError from "./utils/apiError.js";
 
 const app = express();
@@ -229,6 +230,7 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/coupons", couponRoutes);
+app.use("/api/rider", riderRoutes);
 
 // 404 — no route matched
 app.use((req, _res, next) => {

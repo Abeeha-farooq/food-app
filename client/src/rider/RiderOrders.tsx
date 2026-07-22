@@ -4,9 +4,12 @@
 //          Lists every order assigned to the current rider, with
 //          filter pills (All / Pending / Completed) and per-order
 //          action buttons (Accept, Picked Up, Mark as Delivered).
+//          Also handles the live-location broadcast: while the
+//          rider has an active delivery, the browser's GPS is
+//          sent to the server every ~15s.
 // ===============================
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/ui/page-header";
@@ -25,9 +28,12 @@ import {
   Package,
   Check,
   Truck,
+  MapPinOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { getErrorMessage } from "@/lib/api";
+import useGeolocation from "@/lib/useGeolocation";
+import { haversineMeters, formatDistance } from "@/lib/distance";
 
 // ============================================================
 // FILTER TABS
@@ -47,6 +53,87 @@ const RiderOrders = () => {
   // Per-order action in flight — keyed by order id so we can show
   // a spinner on the right button.
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+
+  // ----- Live location (browser GPS) -----
+  // Only enabled when the rider has at least one order in a
+  // "live delivery" state (confirmed / preparing / out_for_delivery).
+  // Privacy: we don't request location when the rider has no
+  // active work — there's no reason to know where they are.
+  const activeOrders = useMemo<Order[]>(
+    () =>
+      (orders || []).filter(
+        (o) =>
+          o.status === "confirmed" ||
+          o.status === "preparing" ||
+          o.status === "out_for_delivery"
+      ),
+    [orders]
+  );
+  const { coords: riderCoords, error: geoError } =
+    useGeolocation(activeOrders.length > 0);
+
+  // Show a one-time toast if the rider denies location. We don't
+  // spam the toast on every render — use a ref.
+  const geoErrorShown = useRef(false);
+  useEffect(() => {
+    if (geoError && !geoErrorShown.current) {
+      toast.warning(geoError);
+      geoErrorShown.current = true;
+    }
+    if (!geoError) geoErrorShown.current = false;
+  }, [geoError]);
+
+  // ----- Periodic location broadcast (every 15s) -----
+  // The browser's geolocation gives us a stream of position
+  // updates (via watchPosition). We only need to upload one
+  // snapshot per order every ~15s — the server keeps the latest.
+  // We round-robin across active orders so if a rider has 2
+  // deliveries in parallel, both get updated.
+  const lastSentRef = useRef<{ ts: number; lat: number; lng: number }>({
+    ts: 0,
+    lat: 0,
+    lng: 0,
+  });
+  useEffect(() => {
+    if (!riderCoords || activeOrders.length === 0) return;
+    const now = Date.now();
+    if (now - lastSentRef.current.ts < 15_000) return;
+    // Only send if the rider actually moved > 20m since the last
+    // send — saves bandwidth when the rider is stationary (e.g.
+    // waiting at the restaurant for the food).
+    const moved = haversineMeters(
+      { lat: lastSentRef.current.lat, lng: lastSentRef.current.lng },
+      { lat: riderCoords.lat, lng: riderCoords.lng }
+    );
+    if (lastSentRef.current.ts !== 0 && moved < 20) return;
+
+    lastSentRef.current = {
+      ts: now,
+      lat: riderCoords.lat,
+      lng: riderCoords.lng,
+    };
+    // Upload in the background — failures shouldn't bother the
+    // rider (network blip etc.). We log to console for debugging.
+    (async () => {
+      for (const order of activeOrders) {
+        try {
+          await api.post("/rider/location", {
+            lat: riderCoords.lat,
+            lng: riderCoords.lng,
+            orderId: order._id,
+          });
+        } catch (err) {
+          // Silent: the rider shouldn't be bothered with transient
+          // network errors. Worst case the customer's map shows
+          // the last known position.
+          console.warn(
+            `[RiderOrders] Failed to upload location for order ${order._id}:`,
+            err
+          );
+        }
+      }
+    })();
+  }, [riderCoords, activeOrders]);
 
   const fetchOrders = async () => {
     setLoading(true);
@@ -195,6 +282,8 @@ const RiderOrders = () => {
               onAccept={() => handleAccept(order._id)}
               onPickedUp={() => handleStatus(order._id, "out_for_delivery")}
               onDelivered={() => handleStatus(order._id, "delivered")}
+              riderCoords={riderCoords}
+              geoError={geoError}
             />
           ))}
         </div>
@@ -212,12 +301,18 @@ const OrderCard = ({
   onAccept,
   onPickedUp,
   onDelivered,
+  riderCoords,
+  geoError,
 }: {
   order: Order;
   busy: boolean;
   onAccept: () => void;
   onPickedUp: () => void;
   onDelivered: () => void;
+  /** Rider's current GPS (for distance indicators). */
+  riderCoords: { lat: number; lng: number } | null;
+  /** Error from the geolocation hook (for the status banner). */
+  geoError: string | null;
 }) => {
   // Decide which action button (if any) to show based on the
   // current state. The order of these checks matters — we go
@@ -289,7 +384,48 @@ const OrderCard = ({
                 {order.restaurant.address}
               </p>
             )}
+            {/* Live "distance to pickup" indicator. Only shown
+                when the rider has shared their GPS AND the
+                restaurant has coords. We don't currently geocode
+                restaurants on the client (would need Nominatim
+                per page load) — distance is shown if the order
+                has riderLocation (which the server stores); on
+                the rider's own device we use their live coords. */}
+            {riderCoords && order.riderLocation?.lat && order.riderLocation?.lng && (
+              <p className="text-xs text-blue-700 mt-1 font-medium">
+                {formatDistance(
+                  haversineMeters(
+                    { lat: riderCoords.lat, lng: riderCoords.lng },
+                    { lat: order.riderLocation.lat, lng: order.riderLocation.lng }
+                  )
+                )}{" "}
+                away
+              </p>
+            )}
           </div>
+        </div>
+
+        {/* ----- Live location status banner ----- */}
+        {/* Shows whether the rider is currently sharing their GPS
+            with the customer. Reassures the rider (and the
+            customer, on their end) that the "live" pin is
+            actually live. */}
+        <div className="flex items-center gap-2 text-xs text-gray-500 px-1">
+          {riderCoords ? (
+            <>
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              <span>Sharing your live location with the customer</span>
+            </>
+          ) : (
+            <>
+              <MapPinOff className="w-3 h-3" />
+              <span>
+                {geoError
+                  ? "Location off — customer won't see you live"
+                  : "Waiting for GPS…"}
+              </span>
+            </>
+          )}
         </div>
 
         {/* ----- Delivery (customer address) ----- */}

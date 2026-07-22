@@ -92,6 +92,17 @@ export interface Order {
   // while the kitchen is still preparing the food. `null` if the
   // rider hasn't acknowledged yet.
   riderAcceptedAt?: string | null;   // ISO date
+  // ----- Rider live location (for "Track your order" map) -----
+  // The rider's browser reports their GPS position every ~15s
+  // while on an active delivery. The customer-facing "Track
+  // your order" view polls the server and reads this. All three
+  // fields are nullable: the rider may not have reported a
+  // position yet, or they may have permission denied, etc.
+  riderLocation?: {
+    lat: number | null;
+    lng: number | null;
+    updatedAt: string | null;   // ISO date
+  } | null;
   // ----- Review fields (set after the customer rates a delivered order) -----
   // All optional — undefined for orders that haven't been reviewed yet.
   rating?: number;          // 1-5

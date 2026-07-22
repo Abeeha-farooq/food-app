@@ -29,6 +29,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { StarRating } from "@/components/ui/StarRating";
+import TrackDeliveryMap from "@/components/ui/TrackDeliveryMap";
 import {
   OrderStatusBadge,
   PaymentStatusBadge,
@@ -559,6 +560,25 @@ const OrderCard = ({ order, isExpanded, onToggle, onRateRider }: OrderCardProps)
             </p>
           </div>
         </div>
+
+        {/* ----- Live tracking map -----
+            Renders the embedded Leaflet map for orders that are
+            currently in a trackable state (preparing, out_for_delivery,
+            or confirmed). The component itself fetches + polls
+            the rider's location every 15s. We pass the delivery
+            address as the customer pin's label (the map will
+            use the rider's position as the actual coordinate
+            until we add server-side geocoding — see the comment
+            in TrackDeliveryMap). */}
+        {(order.status === "preparing" ||
+          order.status === "out_for_delivery" ||
+          order.status === "confirmed") && (
+          <TrackDeliveryMap
+            orderId={order._id}
+            restaurantName={order.restaurant?.name}
+            deliveryAddress={order.deliveryAddress}
+          />
+        )}
       </CardContent>
     </Card>
   );

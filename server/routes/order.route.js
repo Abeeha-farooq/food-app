@@ -14,6 +14,7 @@ import {
   getRiderOrders,
   riderAcceptOrder,
 } from "../controllers/order.controller.js";
+import { getRiderLocation } from "./rider.route.js";
 import { verifyJWT, requireRole } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
@@ -23,6 +24,14 @@ router.use(verifyJWT);
 
 router.post("/", placeOrder);
 router.get("/my", getMyOrders);
+
+// Real-time rider location for the customer's "Track order" map.
+// Mounted under /orders/:id/rider-location (not /rider/.../location)
+// because the URL hierarchy matches what the client code already
+// knows — the order id. The handler itself is in rider.controller.js
+// (closely related to updateRiderLocation). Auth: customer who
+// placed the order, the assigned rider, or an admin.
+router.get("/:id/rider-location", getRiderLocation);
 router.get("/:id", getOrderById);
 
 // ============================================================
