@@ -27,6 +27,26 @@ const restaurantSchema = new mongoose.Schema(
     country: { type: String, required: true, trim: true },
     address: { type: String, default: "" },
 
+    // ----- Geocoded coordinates (for distance / map features) -----
+    // `address` is the human-readable string; `location` is the
+    // machine-readable lat/lng pair that lets us compute distance
+    // to the customer's delivery address (used by the rider
+    // earnings system) and place the restaurant pin on the map.
+    //
+    // Both fields are nullable: geocoding happens lazily via
+    // a one-off script (scripts/geocode-restaurants.js) or when
+    // an admin saves a restaurant without a location. The
+    // earnings system falls back to a flat fee when the location
+    // is missing, so the feature works end-to-end even before
+    // every restaurant has been geocoded.
+    location: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      // When the coordinates were last populated. Used by the
+      // geocoding script to know which rows still need work.
+      geocodedAt: { type: Date, default: null },
+    },
+
     // Visuals
     imageUrl: { type: String, default: "" },
 

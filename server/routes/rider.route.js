@@ -13,6 +13,7 @@ import {
   updateRiderLocation,
   getRiderLocation,
 } from "../controllers/rider.controller.js";
+import { getRiderEarnings } from "../controllers/earnings.controller.js";
 
 const router = express.Router();
 
@@ -24,6 +25,10 @@ router.use(verifyJWT);
 // it's a rider action, not an order action. Body:
 //   { lat: number, lng: number, orderId: string }
 router.post("/location", requireRole("rider"), updateRiderLocation);
+
+// GET /api/rider/earnings — list + summary of this rider's earnings.
+// Used by the rider dashboard's "Earnings" page.
+router.get("/earnings", requireRole("rider"), getRiderEarnings);
 
 // GET /api/orders/:id/rider-location — fetch the current rider
 // location for an order. Lives on the order router (existing

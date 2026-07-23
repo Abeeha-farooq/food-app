@@ -37,11 +37,13 @@ import MenuManagement from './admin/MenuManagement'
 import UserManagement from './admin/UserManagement'
 import CouponManagement from './admin/CouponManagement'
 import RiderManagement from './admin/RiderManagement'
+import AdminEarnings from './admin/AdminEarnings'
 
 // Rider pages
 import RiderLayout from './rider/RiderLayout'
 import RiderDashboard from './rider/RiderDashboard'
 import RiderOrders from './rider/RiderOrders'
+import RiderEarnings from './rider/RiderEarnings'
 
 // Global modals — mounted at the top of the router tree so
 // they can pop up from any page (e.g. the CartConflictModal
@@ -110,6 +112,7 @@ const appRouter = createBrowserRouter([
       { path: "riders",     element: <RiderManagement /> },
       { path: "users",      element: <UserManagement /> },
       { path: "coupons",    element: <CouponManagement /> },
+      { path: "earnings",   element: <AdminEarnings /> },
     ],
   },
   // ============================================================
@@ -130,6 +133,7 @@ const appRouter = createBrowserRouter([
     children: [
       { index: true,        element: <RiderDashboard /> },
       { path: "orders",     element: <RiderOrders /> },
+      { path: "earnings",   element: <RiderEarnings /> },
     ],
   },
 ])

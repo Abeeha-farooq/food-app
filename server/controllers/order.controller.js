@@ -10,6 +10,7 @@ import User from "../models/user.model.js";
 import { verifyPayment } from "./payment.controller.js";
 import { verifyPayPalPayment } from "./paypal.controller.js";
 import { tryRedeemCoupon } from "./coupon.controller.js";
+import { geocodeAddress } from "../utils/geocode.js";
 import ApiError from "../utils/apiError.js";
 import ApiResponse from "../utils/apiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -244,6 +245,16 @@ export const placeOrder = asyncHandler(async (req, res) => {
     deliveryFee,
     totalPrice,
     deliveryAddress,
+    // Geocode the delivery address (best-effort, 1 extra second
+    // of latency for the customer). If Nominatim is down or
+    // can't parse the address, we save the order without
+    // coordinates — the earnings system falls back to a flat
+    // fee in that case.
+    deliveryLocation: await (async () => {
+      const coords = await geocodeAddress(deliveryAddress);
+      if (!coords) return { lat: null, lng: null, geocodedAt: null };
+      return { lat: coords.lat, lng: coords.lng, geocodedAt: new Date() };
+    })(),
     status: initialStatus,
     paymentStatus: finalPaymentStatus,
     // Coupon snapshot — see comment on the order model. Both fields
@@ -476,6 +487,28 @@ export const updateOrderStatus = asyncHandler(async (req, res) => {
     update,
     { new: true }
   );
+
+  // ----- Transition the rider's earning on terminal actions -----
+  // "delivered" → earning: "pending" → "earned" (the rider is owed money)
+  // "refused"   → earning: "pending" → "cancelled" (no payment for refusal)
+  //
+  // We do this AFTER the order update (not as part of the $set)
+  // because the earning is a separate document with its own
+  // lifecycle. We use $set to flip the status + the relevant
+  // timestamp, and we only act if the earning exists (an admin
+  // who manually transitions a never-assigned order won't have
+  // an earning to update).
+  if (existing.rider && (status === "delivered" || status === "refused")) {
+    const RiderEarning = (await import("../models/riderEarning.model.js")).default;
+    const earningUpdate =
+      status === "delivered"
+        ? { status: "earned", earnedAt: new Date() }
+        : { status: "cancelled", cancelledAt: new Date() };
+    await RiderEarning.findOneAndUpdate(
+      { rider: existing.rider, order: order._id },
+      { $set: earningUpdate }
+    );
+  }
 
   return res.status(200).json(new ApiResponse(200, order, "Order status updated"));
 });
@@ -799,6 +832,65 @@ export const assignRider = asyncHandler(async (req, res) => {
   order.riderAssignedAt = new Date();
   order.riderAssignedBy = req.user._id;
   await order.save();
+
+  // ----- 5. Create the RiderEarning -----
+  // We compute the rider's pay for this delivery right now. The
+  // amount depends on the Haversine distance from the restaurant
+  // to the customer's delivery address — if either side is
+  // missing coordinates, we fall back to a flat fee (see
+  // utils/earnings.js). The unique (rider, order) index on the
+  // RiderEarning model makes this an upsert — re-assigning the
+  // same rider to the same order updates the existing earning
+  // instead of erroring on duplicate key.
+  const { haversineMeters } = await import("../utils/geocode.js");
+  const { calculateEarning, EARNINGS_CONFIG } = await import("../utils/earnings.js");
+  const RiderEarning = (await import("../models/riderEarning.model.js")).default;
+
+  // We need the restaurant's location to compute distance.
+  // We didn't fetch the full restaurant earlier — do it now
+  // (just the location field, no menu).
+  const restaurantForDist = await Order.findById(id)
+    .populate("restaurant", "location address name")
+    .then((o) => o?.restaurant);
+  const restaurantCoords =
+    restaurantForDist?.location?.lat != null
+      ? { lat: restaurantForDist.location.lat, lng: restaurantForDist.location.lng }
+      : null;
+  const deliveryCoords =
+    order.deliveryLocation?.lat != null
+      ? { lat: order.deliveryLocation.lat, lng: order.deliveryLocation.lng }
+      : null;
+  const distanceMeters = haversineMeters(restaurantCoords, deliveryCoords);
+  const amount = calculateEarning(distanceMeters);
+
+  await RiderEarning.findOneAndUpdate(
+    { rider: riderId, order: order._id },
+    {
+      $set: {
+        // We preserve the existing amount if the row already
+        // exists (e.g. an admin is reassigning a different
+        // rider — the new rider gets a NEW earning, but if the
+        // same rider is being re-assigned, the old amount stays).
+        // For a fresh assignment, this sets the amount + audit.
+        amount,
+        distanceMeters,
+        baseFee: EARNINGS_CONFIG.baseFee,
+        ratePerKm: EARNINGS_CONFIG.ratePerKm,
+        // status resets to pending (it might have been "cancelled"
+        // if a previous rider was refused — admin re-assigning
+        // to a new rider restarts the earning).
+        status: "pending",
+        createdAt: new Date(),
+        earnedAt: null,
+        paidAt: null,
+        cancelledAt: null,
+        paidBy: null,
+        paidMethod: "",
+        paymentNote: "",
+      },
+    },
+    { upsert: true, new: true }
+  );
 
   // Populate before returning so the client gets the rider's name +
   // contact in the same response (saves a round-trip on the client).

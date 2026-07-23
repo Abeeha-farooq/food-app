@@ -27,6 +27,7 @@ import {
   Users,
   Tag,
   Bike,
+  Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
@@ -42,6 +43,7 @@ const sidebarLinks = [
   { label: "Restaurants", to: "/admin/restaurant", icon: Store },
   { label: "Menu Items", to: "/admin/menu",     icon: Utensils },
   { label: "Riders",     to: "/admin/riders",   icon: Bike },
+  { label: "Earnings",   to: "/admin/earnings", icon: Wallet },
   { label: "Users",      to: "/admin/users",    icon: Users },
   { label: "Coupons",    to: "/admin/coupons",  icon: Tag },
 ];

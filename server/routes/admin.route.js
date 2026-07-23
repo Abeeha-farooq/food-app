@@ -23,6 +23,11 @@ import {
   updateCoupon,
   deleteCoupon,
 } from "../controllers/coupon.controller.js";
+import {
+  getAllEarnings,
+  markEarningPaid,
+  cancelEarning,
+} from "../controllers/earnings.controller.js";
 import { verifyJWT, requireRole } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
@@ -80,5 +85,22 @@ router.get("/coupons", listCoupons);
 router.post("/coupons", createCoupon);
 router.patch("/coupons/:id", updateCoupon);
 router.delete("/coupons/:id", deleteCoupon);
+
+// ----- Earnings / payout management -----
+// GET    /api/admin/earnings          — all earnings (across riders)
+//                                       + per-rider rollup for the dashboard
+// PATCH  /api/admin/earnings/:id/pay  — mark a single earning as paid
+//                                       (body: { method?, note? })
+// PATCH  /api/admin/earnings/:id/cancel — cancel an unpaid earning
+//                                       (body: { note? })
+//
+// The /:id/pay + /:id/cancel literals are mounted BEFORE the
+// /:id parameter route (if we ever add one) so they don't get
+// interpreted as action verbs. For now there's no bare /:id on
+// this router, so ordering doesn't strictly matter — but it's a
+// good habit to keep the literal-action routes first.
+router.get("/earnings", getAllEarnings);
+router.patch("/earnings/:id/pay", markEarningPaid);
+router.patch("/earnings/:id/cancel", cancelEarning);
 
 export default router;

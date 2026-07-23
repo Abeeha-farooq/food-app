@@ -76,6 +76,23 @@ const orderSchema = new mongoose.Schema(
     // Delivery details
     deliveryAddress: { type: String, required: true },
 
+    // ----- Geocoded delivery location -----
+    // The lat/lng of the customer's delivery address. Populated
+    // at order placement time via Nominatim (see utils/geocode.js).
+    // Used by:
+    //   1. The rider earnings system (distance from restaurant
+    //      → here, multiplied by the per-km rate)
+    //   2. The "Track your order" map (future — once we put a
+    //      separate customer pin on the map, this is the coordinate)
+    // Nullable: if geocoding fails (Nominatim down, address too
+    // vague), the earnings system falls back to a flat fee so the
+    // feature still works.
+    deliveryLocation: {
+      lat: { type: Number, default: null },
+      lng: { type: Number, default: null },
+      geocodedAt: { type: Date, default: null },
+    },
+
     // Order lifecycle:
     //   placed → confirmed → preparing → out_for_delivery → delivered
     //   (or "cancelled" at any point by admin, or "refused" at the

@@ -24,6 +24,7 @@ import {
   X,
   LogOut,
   ShoppingBag,
+  Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/useAuth";
@@ -32,8 +33,9 @@ import { useAuth } from "@/context/useAuth";
 // SIDEBAR LINKS — single source of truth
 // ============================================================
 const sidebarLinks = [
-  { label: "Dashboard",      to: "/rider",        icon: LayoutDashboard, end: true },
-  { label: "My Deliveries",  to: "/rider/orders", icon: ShoppingBag },
+  { label: "Dashboard",      to: "/rider",         icon: LayoutDashboard, end: true },
+  { label: "My Deliveries",  to: "/rider/orders",  icon: ShoppingBag },
+  { label: "Earnings",       to: "/rider/earnings", icon: Wallet },
 ];
 
 const RiderLayout = () => {
