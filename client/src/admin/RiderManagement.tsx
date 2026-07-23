@@ -1135,6 +1135,14 @@ const RiderEarningsSection = ({
   onMarkPaid,
   onCancelEarning,
 }: RiderEarningsSectionProps) => {
+  // ----- Status filter dropdown (inside the Earnings tab) -----
+  // The admin can narrow the per-rider expandable lists to
+  // a specific status (e.g. "Pending payment" — the most
+  // actionable one for paying out riders). This filter applies
+  // to the EXPANDABLE LIST inside each card; the summary tiles
+  // always show all 4 statuses regardless of the filter.
+  const [statusFilter, setStatusFilter] = useState<EarningStatus | "all">("all");
+
   // When the section first mounts, kick off earnings fetches for
   // every visible rider. We DON'T await — each card shows its
   // own skeleton. This means the section appears immediately
@@ -1164,6 +1172,31 @@ const RiderEarningsSection = ({
 
   return (
     <div className="space-y-3">
+      {/* ----- Status filter dropdown (only shows inside Earnings tab) ----- */}
+      <div className="flex flex-wrap items-center gap-2">
+        <label
+          htmlFor="earnings-status-filter"
+          className="text-sm text-gray-600"
+        >
+          Show earnings:
+        </label>
+        <select
+          id="earnings-status-filter"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as EarningStatus | "all")}
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400"
+        >
+          <option value="all">All statuses</option>
+          <option value="pending">Pending payment (assigned, not delivered)</option>
+          <option value="earned">Earned (delivered, waiting for payout)</option>
+          <option value="paid">Paid (already paid out)</option>
+          <option value="cancelled">Cancelled (refused by customer)</option>
+        </select>
+        <p className="text-xs text-gray-500 italic">
+          Summary tiles always show all 4 statuses — this filter only affects the per-rider list below.
+        </p>
+      </div>
+
       {riders.map((rider) => (
         <RiderEarningsCard
           key={rider._id}
@@ -1171,6 +1204,7 @@ const RiderEarningsSection = ({
           data={earningsByRider[rider._id] ?? null}
           loading={earningsLoading.has(rider._id)}
           payingEarningId={payingEarningId}
+          statusFilter={statusFilter}
           onRefresh={() => onFetchEarnings(rider._id, true)}
           onMarkPaid={(earningId) => onMarkPaid(rider._id, earningId)}
           onCancel={(earningId) => onCancelEarning(rider._id, earningId)}
@@ -1188,6 +1222,7 @@ const RiderEarningsCard = ({
   data,
   loading,
   payingEarningId,
+  statusFilter,
   onRefresh,
   onMarkPaid,
   onCancel,
@@ -1196,11 +1231,23 @@ const RiderEarningsCard = ({
   data: RiderEarningsResponse | null;
   loading: boolean;
   payingEarningId: string | null;
+  /** Filter applied to the expandable list ("all" = show everything). */
+  statusFilter: EarningStatus | "all";
   onRefresh: () => void;
   onMarkPaid: (earningId: string) => Promise<void>;
   onCancel: (earningId: string) => Promise<void>;
 }) => {
   const [expanded, setExpanded] = useState(false);
+
+  // Apply the dropdown filter to the earning list. We filter
+  // BEFORE sorting so the order in the picker matches the order
+  // shown (pending/earned first, then paid, then cancelled).
+  // When the filter is "all" we show everything.
+  const filteredEarnings = useMemo(() => {
+    if (!data) return [];
+    if (statusFilter === "all") return data.earnings;
+    return data.earnings.filter((e) => e.status === statusFilter);
+  }, [data, statusFilter]);
 
   return (
     <Card>
@@ -1266,7 +1313,7 @@ const RiderEarningsCard = ({
           ) : null}
         </div>
 
-        {/* ----- Earning list (expandable) ----- */}
+        {/* ----- Earning list (expandable, status-filtered) ----- */}
         {data && data.earnings.length > 0 && (
           <div className="border-t border-gray-100 pt-3">
             <button
@@ -1279,22 +1326,31 @@ const RiderEarningsCard = ({
               ) : (
                 <ChevronDown className="w-4 h-4" />
               )}
-              {data.earnings.length} earning
-              {data.earnings.length === 1 ? "" : "s"}
+              {filteredEarnings.length} earning
+              {filteredEarnings.length === 1 ? "" : "s"}
+              {statusFilter !== "all" &&
+                ` matching "${EARNING_STATUS_LABELS[statusFilter as EarningStatus]}"`}
               {data.summary.cancelled > 0 &&
+                statusFilter === "all" &&
                 ` (${data.summary.cancelled} cancelled)`}
             </button>
             {expanded && (
               <div className="mt-3 space-y-1.5">
-                {sortEarningsForAdmin(data.earnings).map((e) => (
-                  <EarningRow
-                    key={e._id}
-                    earning={e}
-                    paying={payingEarningId === e._id}
-                    onMarkPaid={() => onMarkPaid(e._id)}
-                    onCancel={() => onCancel(e._id)}
-                  />
-                ))}
+                {filteredEarnings.length === 0 ? (
+                  <p className="text-xs text-gray-500 italic px-3 py-2">
+                    No earnings match the "{EARNING_STATUS_LABELS[statusFilter as EarningStatus]}" filter for this rider.
+                  </p>
+                ) : (
+                  sortEarningsForAdmin(filteredEarnings).map((e) => (
+                    <EarningRow
+                      key={e._id}
+                      earning={e}
+                      paying={payingEarningId === e._id}
+                      onMarkPaid={() => onMarkPaid(e._id)}
+                      onCancel={() => onCancel(e._id)}
+                    />
+                  ))
+                )}
               </div>
             )}
           </div>
