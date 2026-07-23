@@ -11,13 +11,17 @@
 //   1. Connects to MONGODB_URI
 //   2. Finds all restaurants where `location.lat` is null
 //   3. Geocodes each one's full address (city + country + address)
-//      via Nominatim (rate-limited to 1 req/sec)
+//      via Google Geocoding API
 //   4. Updates the restaurant with the coordinates
 //
-// We respect Nominatim's rate limit (1.1s between requests).
-// For 10 restaurants, the script takes ~15 seconds. For 50, ~1
-// minute. You can re-run it any time — restaurants that already
-// have coordinates are skipped.
+// Google Geocoding is rate-limited at 50 req/sec; we serialize
+// at ~20 req/sec via the in-process queue in utils/geocode.js.
+// For 10 restaurants, the script takes ~1 second. For 50, ~3
+// seconds. You can re-run it any time — restaurants that
+// already have coordinates are skipped.
+//
+// Requires GOOGLE_MAPS_API_KEY in server/.env. Without it, the
+// script exits early with a clear error.
 // ===============================
 
 import "dotenv/config";
@@ -29,6 +33,13 @@ const geocodeRestaurants = async () => {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
     console.error("❌ MONGODB_URI not set in server/.env");
+    process.exit(1);
+  }
+  if (!process.env.GOOGLE_MAPS_API_KEY) {
+    console.error(
+      "❌ GOOGLE_MAPS_API_KEY not set in server/.env\n" +
+        "   Add your Google Maps API key to server/.env and re-run."
+    );
     process.exit(1);
   }
 
@@ -57,8 +68,8 @@ const geocodeRestaurants = async () => {
   let success = 0;
   let failed = 0;
   for (const r of pending) {
-    // Build the full address string. Nominatim does better with
-    // more context (city + country especially).
+    // Build the full address string. Google Geocoding does better
+    // with more context (city + country especially).
     const fullAddress = [r.address, r.city, r.country]
       .filter(Boolean)
       .join(", ");
@@ -97,3 +108,4 @@ geocodeRestaurants().catch((err) => {
   console.error("❌ Geocoding failed:", err);
   process.exit(1);
 });
+

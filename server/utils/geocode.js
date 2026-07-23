@@ -1,53 +1,57 @@
 // utils/geocode.js
 // ===============================
 // Purpose: Convert an address string into { lat, lng } using the
-//          OpenStreetMap Nominatim API (free, no API key).
+//          Google Geocoding API.
 //
-// Why Nominatim:
-//   - Free, no signup, no API key
-//   - OpenStreetMap data covers Pakistan well
-//   - Standard for hobby / small-scale food delivery apps
+// Why Google (over Nominatim / OpenStreetMap):
+//   - More accurate for Pakistan-specific addresses
+//   - 50 requests/second rate limit (vs Nominatim's 1/sec)
+//   - Same key works for both the map display (client-side) and
+//     the geocoding (server-side)
 //
-// Why not Google Maps Geocoding API:
-//   - Costs $5 / 1000 requests
-//   - Requires a billing account even for free tier
-//   - The user said "no duplicate APIs" — OSM is the only one we
-//     need for both the map and the geocoding
+// Security model:
+//   - The API key is read from process.env.GOOGLE_MAPS_API_KEY
+//     on the server (NEVER bundled in the client code that
+//     geocodes — the client only geocodes via us).
+//   - The CLIENT only uses the key to render the map; that key
+//     should be HTTP-referrer-restricted in Google Cloud Console
+//     to prevent abuse.
+//   - The server can ALSO use the same key (it's the same Google
+//     project) — both server and client read the same value from
+//     the same .env file.
 //
-// Rate limiting:
-//   - Nominatim's usage policy: max 1 request per second
-//   - We serialize requests through a chain so the rate is respected
-//   - We cache results in-memory forever (addresses don't move)
-//   - If Nominatim is down or returns no result, we return null
-//     and the caller falls back to a flat fee (graceful degradation)
+// Caching:
+//   - Same in-memory cache as before. Geocoding results don't
+//     change often, so caching by address hash avoids repeat
+//     charges. (Geocoding API costs $5 / 1000 requests.)
+//   - We cache "not found" too, so a malformed address doesn't
+//     keep hitting the API.
 //
-// Privacy:
-//   - Nominatim logs the requesting IP. The user-agent header is
-//     mandatory per their policy. We set it to "FlavourCourt/1.0"
-//     + a contact URL so they can reach us if our traffic spikes.
+// Graceful degradation:
+//   - If GOOGLE_MAPS_API_KEY is missing, geocoding returns null
+//     and the caller falls back to a flat fee for the earning
+//     calculation. The app still works; you just don't get
+//     distance-based pay for new orders until you set the key.
 // ===============================
-
-import { ApiError } from "./apiError.js";
 
 // ----- In-memory cache -----
 // Key: lowercased + trimmed address. Value: { lat, lng } | null.
-// We cache "not found" results too (as null) so a malformed
-// address doesn't keep hitting the API on every request.
 const cache = new Map();
 
 // ----- Serialized request queue -----
-// A single promise chain ensures requests fire at most 1 per
-// second. We schedule a small artificial delay (1.1s) between
-// each call to stay well under Nominatim's rate limit.
+// Google allows 50 req/sec, but we serialize anyway so a burst
+// of new orders doesn't spike. Each request gets a small
+// artificial delay (50ms) — well under the limit but smooths
+// the curve.
 let lastRequestAt = 0;
 let nextRequest = Promise.resolve();
 
-const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
-const RATE_LIMIT_MS = 1100; // 1.1 seconds between requests
-const USER_AGENT = "FlavourCourt/1.0 (contact: support@flavourcourt.com)";
+const GOOGLE_GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json";
+const RATE_LIMIT_MS = 50; // 50ms between requests = max 20 req/sec, well under Google's 50/sec limit
 
 /**
- * Geocode a single address string. Returns { lat, lng } or null.
+ * Geocode a single address string via Google Geocoding API.
+ * Returns { lat, lng } or null.
  *
  * @param {string} address - The full address to geocode
  * @returns {Promise<{ lat: number, lng: number } | null>}
@@ -60,8 +64,25 @@ export const geocodeAddress = async (address) => {
   // Cache hit (success or "not found" — both stored)
   if (cache.has(key)) return cache.get(key);
 
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) {
+    // No key configured — we silently return null. The caller
+    // (rider earnings system) will fall back to a flat fee.
+    // Log once on first call so the operator notices in their
+    // server logs that geocoding is disabled.
+    if (!geocodeAddress._warned) {
+      console.warn(
+        "[geocode] GOOGLE_MAPS_API_KEY is not set — geocoding is disabled. " +
+          "Riders will get the flat default fee until this is configured."
+      );
+      geocodeAddress._warned = true;
+    }
+    cache.set(key, null);
+    return null;
+  }
+
   // Serialize: chain the next request after the current one,
-  // with a 1.1s gap to respect Nominatim's rate limit.
+  // with a 50ms gap to stay well under Google's 50 req/sec limit.
   const result = nextRequest.then(async () => {
     const now = Date.now();
     const wait = Math.max(0, RATE_LIMIT_MS - (now - lastRequestAt));
@@ -69,36 +90,39 @@ export const geocodeAddress = async (address) => {
     lastRequestAt = Date.now();
 
     try {
-      const url = new URL(NOMINATIM_URL);
-      url.searchParams.set("q", address);
-      url.searchParams.set("format", "json");
-      url.searchParams.set("limit", "1");
-      // addressdetails=1 lets us read the formatted address back
-      // (useful for the "did we find what you meant?" UX later).
-      url.searchParams.set("addressdetails", "1");
+      const url = new URL(GOOGLE_GEOCODE_URL);
+      url.searchParams.set("address", address);
+      url.searchParams.set("key", apiKey);
 
-      const res = await fetch(url, {
-        headers: { "User-Agent": USER_AGENT },
-      });
+      const res = await fetch(url);
       if (!res.ok) {
-        // Rate-limited or server error — don't throw, just return
-        // null and let the caller fall back. Log so we can see it.
         console.warn(
-          `[geocode] Nominatim returned ${res.status} for "${address}"`
+          `[geocode] Google returned HTTP ${res.status} for "${address}"`
         );
         return null;
       }
       const data = await res.json();
-      if (!Array.isArray(data) || data.length === 0) return null;
+      // Google's response shape:
+      //   { status: "OK" | "ZERO_RESULTS" | "OVER_QUERY_LIMIT" | ...,
+      //     results: [{ geometry: { location: { lat, lng } }, ... }] }
+      if (data.status !== "OK" || !Array.isArray(data.results) || data.results.length === 0) {
+        // OVER_QUERY_LIMIT is worth surfacing — the operator
+        // should know if they're being rate-limited.
+        if (data.status === "OVER_QUERY_LIMIT" || data.status === "REQUEST_DENIED") {
+          console.warn(
+            `[geocode] Google status "${data.status}" for "${address}". ` +
+              "Check your API key, billing, and quota."
+          );
+        }
+        return null;
+      }
 
-      const { lat, lon } = data[0];
+      const { lat, lng } = data.results[0].geometry.location;
       const latN = Number(lat);
-      const lngN = Number(lon);
+      const lngN = Number(lng);
       if (!Number.isFinite(latN) || !Number.isFinite(lngN)) return null;
       return { lat: latN, lng: lngN };
     } catch (err) {
-      // Network error, DNS error, etc. Don't throw — caller will
-      // fall back to a flat fee.
       console.warn(`[geocode] Error geocoding "${address}":`, err.message);
       return null;
     }
@@ -115,10 +139,11 @@ export const geocodeAddress = async (address) => {
 
 /**
  * Haversine distance between two { lat, lng } points, in METERS.
- * We keep the math here (rather than re-importing the client util)
- * because the server might be Node and the client browser —
- * sharing the same formula via copy is fine; we just need to keep
- * the two in sync. (Same algorithm: R=6371km, atan2(sin²+cos·cos·sin²).)
+ *
+ * We keep the math here rather than re-importing the client util
+ * because the server is Node and the client is browser — sharing
+ * via copy is fine; we just need to keep the two in sync. (Same
+ * algorithm: R=6371km, atan2(sin²+cos·cos·sin²).)
  */
 export const haversineMeters = (a, b) => {
   if (!a || !b) return null;
