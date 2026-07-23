@@ -76,11 +76,28 @@ const orderSchema = new mongoose.Schema(
     // Delivery details
     deliveryAddress: { type: String, required: true },
 
-    // Order lifecycle: placed -> confirmed -> preparing -> out_for_delivery -> delivered
-    // (or "cancelled" at any point)
+    // Order lifecycle:
+    //   placed → confirmed → preparing → out_for_delivery → delivered
+    //   (or "cancelled" at any point by admin, or "refused" at the
+    //   delivery address by the rider)
+    //
+    // "refused" is a rider-set terminal state used when the rider
+    // arrives at the delivery address but the customer refuses to
+    // accept the food (changed their mind, too late, wrong order,
+    // etc.). Distinct from "cancelled" which is an admin action
+    // before delivery. Like "delivered", "refused" is RESERVED
+    // FOR THE RIDER — see updateOrderStatus in order.controller.js.
     status: {
       type: String,
-      enum: ["placed", "confirmed", "preparing", "out_for_delivery", "delivered", "cancelled"],
+      enum: [
+        "placed",
+        "confirmed",
+        "preparing",
+        "out_for_delivery",
+        "delivered",
+        "cancelled",
+        "refused",
+      ],
       default: "placed",
     },
 

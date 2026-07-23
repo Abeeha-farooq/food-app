@@ -29,6 +29,7 @@ import {
   Check,
   Truck,
   MapPinOff,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { getErrorMessage } from "@/lib/api";
@@ -186,19 +187,25 @@ const RiderOrders = () => {
     }
   };
 
-  // ----- Action: Picked Up / Mark as Delivered -----
-  // Both go through the existing PATCH /orders/:id/status endpoint.
-  // The server allows riders to set only "out_for_delivery" and
-  // "delivered" (enforced in the controller).
+  // ----- Action: Picked Up / Mark as Delivered / Mark as Refused -----
+  // All three go through the existing PATCH /orders/:id/status
+  // endpoint. The server allows riders to set only
+  // "out_for_delivery", "delivered", or "refused" (enforced in
+  // the controller).
   const handleStatus = async (orderId: string, newStatus: OrderStatus) => {
     setBusyOrderId(orderId);
     try {
       await api.patch(`/orders/${orderId}/status`, { status: newStatus });
-      toast.success(
-        newStatus === "out_for_delivery"
-          ? "Marked as picked up"
-          : "Marked as delivered"
-      );
+      const successMessages: Record<OrderStatus, string> = {
+        placed:           "Order reset to placed",
+        confirmed:        "Order confirmed",
+        preparing:        "Marked as preparing",
+        out_for_delivery: "Marked as picked up",
+        delivered:        "Marked as delivered",
+        cancelled:        "Order cancelled",
+        refused:          "Marked as refused by customer",
+      };
+      toast.success(successMessages[newStatus]);
       await fetchOrders();
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -282,6 +289,7 @@ const RiderOrders = () => {
               onAccept={() => handleAccept(order._id)}
               onPickedUp={() => handleStatus(order._id, "out_for_delivery")}
               onDelivered={() => handleStatus(order._id, "delivered")}
+              onRefused={() => handleStatus(order._id, "refused")}
               riderCoords={riderCoords}
               geoError={geoError}
             />
@@ -301,6 +309,7 @@ const OrderCard = ({
   onAccept,
   onPickedUp,
   onDelivered,
+  onRefused,
   riderCoords,
   geoError,
 }: {
@@ -309,6 +318,8 @@ const OrderCard = ({
   onAccept: () => void;
   onPickedUp: () => void;
   onDelivered: () => void;
+  /** Mark as Refused by Customer (rider arrived, customer didn't take it). */
+  onRefused: () => void;
   /** Rider's current GPS (for distance indicators). */
   riderCoords: { lat: number; lng: number } | null;
   /** Error from the geolocation hook (for the status banner). */
@@ -317,16 +328,24 @@ const OrderCard = ({
   // Decide which action button (if any) to show based on the
   // current state. The order of these checks matters — we go
   // from "earliest action" to "latest".
+  //
+  // Terminal states (no action buttons): "delivered", "cancelled",
+  // "refused" — once we're there, the work is done.
   const showAccept =
     !order.riderAcceptedAt &&
     order.status !== "delivered" &&
-    order.status !== "cancelled";
+    order.status !== "cancelled" &&
+    order.status !== "refused";
   const showPickedUp =
     order.riderAcceptedAt &&
     order.status !== "out_for_delivery" &&
     order.status !== "delivered" &&
-    order.status !== "cancelled";
-  const showDelivered = order.status === "out_for_delivery";
+    order.status !== "cancelled" &&
+    order.status !== "refused";
+  // BOTH "delivered" and "refused" are valid outcomes at the
+  // delivery address. We show both buttons when the rider is
+  // out_for_delivery — they pick whichever matches reality.
+  const showTerminalChoice = order.status === "out_for_delivery";
 
   return (
     <Card>
@@ -463,7 +482,7 @@ const OrderCard = ({
         </div>
 
         {/* ----- Action buttons ----- */}
-        {(showAccept || showPickedUp || showDelivered) && (
+        {(showAccept || showPickedUp || showTerminalChoice) && (
           <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-gray-100">
             {showAccept && (
               <Button
@@ -487,26 +506,50 @@ const OrderCard = ({
                 Picked Up
               </Button>
             )}
-            {showDelivered && (
-              <Button
-                type="button"
-                onClick={onDelivered}
-                disabled={busy}
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-              >
-                <Check className="w-4 h-4 mr-1.5" />
-                Mark as Delivered
-              </Button>
+            {showTerminalChoice && (
+              <>
+                {/* Primary outcome — happy path. Big green button. */}
+                <Button
+                  type="button"
+                  onClick={onDelivered}
+                  disabled={busy}
+                  className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                >
+                  <Check className="w-4 h-4 mr-1.5" />
+                  Mark as Delivered
+                </Button>
+                {/* Secondary outcome — customer didn't take the food.
+                    Outlined + red so it doesn't get tapped by accident.
+                    The two-click confirmation (we already show a busy
+                    state on this card while the request is in flight)
+                    is enough protection; no extra "are you sure?" modal
+                    needed because the rider is intentional about which
+                    button they're tapping on a delivery. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={onRefused}
+                  disabled={busy}
+                  className="flex-1 text-red-700 border-red-300 hover:bg-red-50 hover:border-red-400"
+                >
+                  <XCircle className="w-4 h-4 mr-1.5" />
+                  Refused by Customer
+                </Button>
+              </>
             )}
           </div>
         )}
 
         {/* If the order is in a state where no action is possible
-            (delivered/cancelled), show a quiet status line instead
-            of an empty actions area. */}
-        {!showAccept && !showPickedUp && !showDelivered && (
+            (delivered/cancelled/refused), show a quiet status line
+            instead of an empty actions area. The wording is
+            different for "refused" so the rider sees a clear
+            summary of what they reported. */}
+        {!showAccept && !showPickedUp && !showTerminalChoice && (
           <div className="pt-2 border-t border-gray-100 text-sm text-gray-500 italic">
-            No further action required — this order is {STATUS_LABELS[order.status]}.
+            {order.status === "refused"
+              ? "You reported this order as refused. The food was not delivered."
+              : `No further action required — this order is ${STATUS_LABELS[order.status]}.`}
           </div>
         )}
       </CardContent>

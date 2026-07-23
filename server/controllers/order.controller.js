@@ -368,7 +368,15 @@ export const getAllOrders = asyncHandler(async (req, res) => {
 // existing snapshot — first delivery wins.
 export const updateOrderStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
-  const allowed = ["placed", "confirmed", "preparing", "out_for_delivery", "delivered", "cancelled"];
+  const allowed = [
+    "placed",
+    "confirmed",
+    "preparing",
+    "out_for_delivery",
+    "delivered",
+    "cancelled",
+    "refused",
+  ];
   if (!allowed.includes(status)) {
     throw new ApiError(400, `Invalid status. Allowed: ${allowed.join(", ")}`);
   }
@@ -382,30 +390,70 @@ export const updateOrderStatus = asyncHandler(async (req, res) => {
   // statuses in the delivery flow. They cannot put orders back to
   // "placed"/"confirmed"/"preparing" (that's the kitchen's job)
   // and they cannot cancel orders (that's the admin's job).
+  //
+  // Riders ARE allowed to set the two terminal states at the
+  // delivery address: "delivered" (success) or "refused" (customer
+  // didn't take the food). Both also trigger the rider snapshot
+  // below — we want to know who handled the order at the end,
+  // whether the outcome was a delivery or a refusal.
   if (req.user.role === "rider") {
     if (existing.rider?.toString() !== req.user._id.toString()) {
       throw new ApiError(403, "This order is not assigned to you");
     }
-    const riderAllowed = ["out_for_delivery", "delivered"];
+    const riderAllowed = ["out_for_delivery", "delivered", "refused"];
     if (!riderAllowed.includes(status)) {
       throw new ApiError(
         403,
-        `Riders can only mark orders as "Picked up" (out_for_delivery) or "Delivered". Got: "${status}"`
+        `Riders can only mark orders as "Picked up" (out_for_delivery), "Delivered", or "Refused". Got: "${status}"`
       );
     }
+  }
+
+  // ----- Admin restriction -----
+  // Admins can transition orders through the full kitchen/admin
+  // flow (placed → confirmed → preparing → out_for_delivery,
+  // plus cancelled) but the two RIDER-TERMINAL states are
+  // RESERVED FOR THE RIDER:
+  //
+  //   "delivered" — rider arrived, customer accepted the food
+  //   "refused"   — rider arrived, customer refused the food
+  //
+  // Both trigger the rider snapshot (frozen name + phone at the
+  // moment of the action). The rider is the source of truth for
+  // these two because they are the ones physically at the
+  // delivery address. The admin's role ends at "out_for_delivery";
+  // the rider's dashboard is the only way to advance to either
+  // terminal state.
+  if (
+    req.user.role === "admin" &&
+    (status === "delivered" || status === "refused")
+  ) {
+    throw new ApiError(
+      403,
+      `Only the assigned rider can mark an order as "${status}". ` +
+        "Use the rider dashboard to record the delivery outcome."
+    );
   }
 
   // Build the update payload. Default = just the new status.
   const update = { status };
 
-  // ----- Snapshot the rider on delivery -----
+  // ----- Snapshot the rider on the terminal action -----
+  // We freeze the rider's name + phone on the order when the
+  // rider performs one of the two rider-only terminal actions
+  // ("delivered" or "refused"). The snapshot ensures the
+  // historical record knows who handled the order at the
+  // moment of completion — if the rider's account later changes
+  // (rename, phone change, deletion, blacklist), the customer
+  // and admin still see the right name/phone.
+  //
   // Conditions:
-  //   1. Transitioning TO "delivered" (any other target status is
-  //      a no-op for the snapshot)
+  //   1. Transitioning TO "delivered" OR "refused" (any other
+  //      target status is a no-op for the snapshot)
   //   2. Order has a rider assigned
   //   3. No snapshot has been captured yet (idempotency)
   if (
-    status === "delivered" &&
+    (status === "delivered" || status === "refused") &&
     existing.rider &&
     !existing.riderSnapshot?.capturedAt
   ) {
@@ -417,9 +465,10 @@ export const updateOrderStatus = asyncHandler(async (req, res) => {
         capturedAt: new Date(),
       };
     }
-    // If the rider was hard-deleted between assignment and delivery,
-    // we silently skip the snapshot. The order still progresses to
-    // delivered; there's just nothing to freeze. Rare edge case.
+    // If the rider was hard-deleted between assignment and the
+    // terminal action, we silently skip the snapshot. The order
+    // still progresses; there's just nothing to freeze. Rare edge
+    // case.
   }
 
   const order = await Order.findByIdAndUpdate(

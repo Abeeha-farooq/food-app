@@ -19,17 +19,27 @@
 // TYPES
 // ============================================================
 
-// The lifecycle of an order. The backend model has 6 values, but per the
-// project's UX spec, the admin only SETS 5 (no "confirmed" — the system
-// skips that stage). "Confirmed" is still a valid value on existing orders
-// from the seed data, so we keep it in the type.
+// The lifecycle of an order.
+//   placed → confirmed → preparing → out_for_delivery →
+//     { delivered, refused }   ← terminal (rider-only)
+//   { cancelled }              ← terminal (admin-only, any time)
+//
+// "delivered" — rider arrived, customer accepted the food
+// "refused"   — rider arrived, customer refused to take the food
+// "cancelled" — admin cancelled (pre-accept or any time before rider)
+//
+// "delivered" and "refused" are RESERVED FOR THE RIDER (see
+// the admin branch of updateOrderStatus in order.controller.js).
+// The admin's role ends at "out_for_delivery"; the rider's
+// dashboard is the only way to advance to either terminal state.
 export type OrderStatus =
   | "placed"
   | "confirmed"
   | "preparing"
   | "out_for_delivery"
   | "delivered"
-  | "cancelled";
+  | "cancelled"
+  | "refused";
 
 // Payment status — independent of order status. An order can be "delivered"
 // with payment "pending" (cash on delivery), or "preparing" with payment
@@ -205,6 +215,12 @@ export const STATUS_COLORS: Record<OrderStatus, string> = {
   out_for_delivery: "bg-purple-100 text-purple-800 border-purple-300",
   delivered:        "bg-green-100 text-green-800 border-green-300",
   cancelled:        "bg-red-100 text-red-800 border-red-300",
+  // Red-orange tone to distinguish "refused" (rider reported a
+  // failed delivery at the door) from "cancelled" (admin called
+  // it off before/at the kitchen). Both are "bad outcomes" but
+  // they're different workflows and the colors help the admin
+  // spot the difference in a list of orders.
+  refused:          "bg-orange-100 text-orange-900 border-orange-400",
 };
 
 // Human-readable status labels. "placed" displays as "Pending acceptance"
@@ -219,18 +235,22 @@ export const STATUS_LABELS: Record<OrderStatus, string> = {
   out_for_delivery: "Out for delivery",
   delivered:        "Delivered",
   cancelled:        "Cancelled",
+  refused:          "Refused",
 };
 
-// The 6 statuses the admin can SET via the order-status update endpoint.
-// "confirmed" is now included — the dedicated Accept / Reject endpoints
-// are the typical path, but admins can still manually transition via the
-// status dropdown if they need to (e.g. correct a misclick).
+// The statuses the admin can SET via the order-status update endpoint.
+// "delivered" is INTENTIONALLY EXCLUDED — marking an order as
+// delivered is the rider's job (it triggers the riderSnapshot
+// freeze + auto-rate-rider prompt for the customer). The admin
+// drives the kitchen flow up to "out_for_delivery" and hands
+// off to the rider for the final step. The server enforces
+// this rule too (defense in depth) — see the admin branch of
+// updateOrderStatus in order.controller.js.
 export const ADMIN_SETTABLE_STATUSES: OrderStatus[] = [
   "placed",
   "confirmed",
   "preparing",
   "out_for_delivery",
-  "delivered",
   "cancelled",
 ];
 

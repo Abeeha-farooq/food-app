@@ -49,6 +49,7 @@ import {
   Bike,
   Phone,
   Star,
+  AlertTriangle,
 } from "lucide-react";
 
 // How many items to show in the collapsed view before adding "+N more".
@@ -578,6 +579,39 @@ const OrderCard = ({ order, isExpanded, onToggle, onRateRider }: OrderCardProps)
             restaurantName={order.restaurant?.name}
             deliveryAddress={order.deliveryAddress}
           />
+        )}
+
+        {/* ----- Refused notice -----
+            Shown when the rider reports that the customer didn't
+            accept the food at the door. We give a clear,
+            non-alarming message: the food wasn't delivered, the
+            order is in a terminal state, and the customer should
+            contact support for next steps (refund / re-order).
+            No review prompt (we don't want the customer rating
+            a delivery that didn't happen). */}
+        {order.status === "refused" && (
+          <div className="border-t border-gray-100 bg-orange-50 px-4 py-4 rounded-b-lg">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+              <div className="text-sm">
+                <p className="font-semibold text-orange-900">
+                  Delivery was refused
+                </p>
+                <p className="text-orange-800 mt-1">
+                  Your rider reported that the order wasn't accepted at the
+                  delivery address. Please contact support for a refund or
+                  to place a new order.
+                </p>
+                {getDisplayRider(order) && (
+                  <p className="text-xs text-orange-700 mt-2">
+                    Rider on record: {getDisplayRider(order)?.fullname}
+                    {getDisplayRider(order)?.contact &&
+                      ` • ${getDisplayRider(order)?.contact}`}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>
