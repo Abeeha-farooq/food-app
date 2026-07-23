@@ -53,6 +53,13 @@ import {
   Loader2,
   Eye,
   EyeOff,
+  Wallet,
+  TrendingUp,
+  Clock,
+  Banknote,
+  ChevronDown,
+  ChevronUp,
+  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { getErrorMessage } from "@/lib/api";
@@ -75,6 +82,76 @@ interface AdminRider {
   updatedAt: string;
 }
 
+// ============================================================
+// EARNINGS TYPES — mirror the server's RiderEarning model
+// ============================================================
+// Used by the "Earnings" tab in this page. We keep the type
+// local rather than importing from a shared module because
+// the admin's "Mark as Paid" flow has the same shape as the
+// standalone /admin/earnings page — we could DRY it up later
+// by extracting a shared <EarningsTable> component.
+type EarningStatus = "pending" | "earned" | "paid" | "cancelled";
+
+interface OrderSummary {
+  _id: string;
+  status: string;
+  totalPrice: number;
+  deliveryAddress: string;
+  restaurant?: { name: string };
+  createdAt: string;
+}
+
+interface Earning {
+  _id: string;
+  rider: string;
+  order: OrderSummary;
+  amount: number;
+  distanceMeters: number | null;
+  baseFee: number;
+  ratePerKm: number;
+  status: EarningStatus;
+  createdAt: string;
+  earnedAt: string | null;
+  paidAt: string | null;
+  cancelledAt: string | null;
+  paidMethod: string;
+  paymentNote: string;
+}
+
+interface RiderEarningsResponse {
+  earnings: Earning[];
+  summary: {
+    total: number;
+    pending: number;
+    earned: number;
+    paid: number;
+    cancelled: number;
+    count: { pending: number; earned: number; paid: number; cancelled: number };
+  };
+}
+
+const EARNING_STATUS_COLORS: Record<EarningStatus, string> = {
+  pending:   "bg-yellow-100 text-yellow-800 border-yellow-300",
+  earned:    "bg-green-100 text-green-800 border-green-300",
+  paid:      "bg-blue-100 text-blue-800 border-blue-300",
+  cancelled: "bg-red-100 text-red-800 border-red-300",
+};
+
+const EARNING_STATUS_LABELS: Record<EarningStatus, string> = {
+  pending:   "Pending",
+  earned:    "Earned",
+  paid:      "Paid",
+  cancelled: "Cancelled",
+};
+
+const fmtRs = (n: number) => `Rs. ${n.toFixed(0)}`;
+const fmtKm = (m: number | null) =>
+  m == null
+    ? "—"
+    : m < 1000
+    ? `${Math.round(m)} m`
+    : `${(m / 1000).toFixed(1)} km`;
+
 // Form state for the create modal. Strings for everything so the
 // user can clear + retype without NaN coercion.
 interface RiderFormData {
@@ -93,7 +170,7 @@ const EMPTY_FORM: RiderFormData = {
 
 // Status filter for the list (similar to the tabs in UserManagement,
 // but kept simpler here — just three pills).
-type StatusFilter = "all" | "pending" | "approved" | "blacklisted";
+type StatusFilter = "all" | "pending" | "approved" | "blacklisted" | "earnings";
 
 // ============================================================
 // COMPONENT
@@ -111,6 +188,123 @@ const RiderManagement = () => {
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [blacklistingId, setBlacklistingId] = useState<string | null>(null);
   const [unblacklistingId, setUnblacklistingId] = useState<string | null>(null);
+
+  // ----- Earnings per rider -----
+  // When the "Earnings" tab is active, we lazy-load each rider's
+  // earnings the first time the tab is opened. We cache them in
+  // a Map<riderId, RiderEarningsResponse> so navigating back and
+  // forth doesn't re-hit the server. Refresh is per-rider.
+  const [earningsByRider, setEarningsByRider] = useState<
+    Record<string, RiderEarningsResponse | null>
+  >({});
+  const [earningsLoading, setEarningsLoading] = useState<Set<string>>(
+    new Set()
+  );
+  const [payingEarningId, setPayingEarningId] = useState<string | null>(null);
+
+  const fetchRiderEarnings = async (riderId: string, force = false) => {
+    if (!force && earningsByRider[riderId] !== undefined) return;
+    setEarningsLoading((prev) => new Set(prev).add(riderId));
+    try {
+      // We use the public /api/rider/earnings endpoint (rider role
+      // gated). The admin's JWT has role="admin" — which would be
+      // rejected by requireRole("rider") on the server. So we
+      // need an admin-scoped endpoint instead. Easiest: reuse the
+      // /admin/earnings list and filter client-side, OR add a new
+      // /admin/riders/:id/earnings endpoint. We'll filter from the
+      // global list to keep this small.
+      //
+      // The full list endpoint returns earnings for ALL riders; we
+      // filter client-side by rider._id. For 1000+ earnings this
+      // could become slow — at that point we'd add a per-rider
+      // endpoint. For an MVP with < 100 active earnings, this is
+      // instant.
+      const res = await api.get("/admin/earnings");
+      const all: RiderEarningsResponse = res.data.data;
+      // Build a per-rider response shape from the global one.
+      const mine = all.earnings.filter(
+        (e: Earning) => e.rider === riderId || (e.rider as any)?._id === riderId
+      );
+      const summary = {
+        total: 0,
+        pending: 0,
+        earned: 0,
+        paid: 0,
+        cancelled: 0,
+        count: { pending: 0, earned: 0, paid: 0, cancelled: 0 },
+      };
+      for (const e of mine) {
+        summary.total += e.amount || 0;
+        if (e.status === "pending") {
+          summary.pending += e.amount || 0;
+          summary.count.pending += 1;
+        } else if (e.status === "earned") {
+          summary.earned += e.amount || 0;
+          summary.count.earned += 1;
+        } else if (e.status === "paid") {
+          summary.paid += e.amount || 0;
+          summary.count.paid += 1;
+        } else if (e.status === "cancelled") {
+          summary.cancelled += e.amount || 0;
+          summary.count.cancelled += 1;
+        }
+      }
+      setEarningsByRider((prev) => ({
+        ...prev,
+        [riderId]: { earnings: mine, summary },
+      }));
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+      setEarningsByRider((prev) => ({ ...prev, [riderId]: null }));
+    } finally {
+      setEarningsLoading((prev) => {
+        const next = new Set(prev);
+        next.delete(riderId);
+        return next;
+      });
+    }
+  };
+
+  const handleMarkPaid = async (riderId: string, earningId: string) => {
+    if (!window.confirm("Mark this earning as paid?")) return;
+    setPayingEarningId(earningId);
+    try {
+      await api.patch(`/admin/earnings/${earningId}/pay`, {
+        method: "cash",
+        note: "",
+      });
+      toast.success("Earning marked as paid");
+      // Re-fetch this rider's earnings (force = true) so the
+      // local state reflects the new status.
+      await fetchRiderEarnings(riderId, true);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setPayingEarningId(null);
+    }
+  };
+
+  const handleCancelEarning = async (
+    riderId: string,
+    earningId: string
+  ) => {
+    if (
+      !window.confirm(
+        "Cancel this earning? (Use when an order was refunded or disputed.)"
+      )
+    )
+      return;
+    setPayingEarningId(earningId);
+    try {
+      await api.patch(`/admin/earnings/${earningId}/cancel`, { note: "" });
+      toast.success("Earning cancelled");
+      await fetchRiderEarnings(riderId, true);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setPayingEarningId(null);
+    }
+  };
 
   // ----- UI state -----
   const [showCreate, setShowCreate] = useState(false);
@@ -333,6 +527,7 @@ const RiderManagement = () => {
               { value: "pending",     label: `Pending (${counts.pending})` },
               { value: "approved",    label: `Approved (${counts.approved})` },
               { value: "blacklisted", label: `Blacklisted (${counts.blacklisted})` },
+              { value: "earnings",    label: `Earnings` },
             ] as { value: StatusFilter; label: string }[]
           ).map((opt) => {
             const active = statusFilter === opt.value;
@@ -430,25 +625,41 @@ const RiderManagement = () => {
         />
       )}
 
-      {/* ----- List ----- */}
-      {!loading && !loadError && filteredRiders.length > 0 && (
-        <div className="space-y-3">
-          {filteredRiders.map((rider) => (
-            <RiderRow
-              key={rider._id}
-              rider={rider}
-              isApproving={approvingId === rider._id}
-              isRejecting={rejectingId === rider._id}
-              isBlacklisting={blacklistingId === rider._id}
-              isUnblacklisting={unblacklistingId === rider._id}
-              onApprove={() => handleApprove(rider)}
-              onReject={() => handleReject(rider)}
-              onBlacklist={() => handleBlacklist(rider)}
-              onUnblacklist={() => handleUnblacklist(rider)}
-            />
-          ))}
-        </div>
+      {/* ----- Earnings tab: per-rider earnings list with summary ----- */}
+      {statusFilter === "earnings" && !loading && !loadError && (
+        <RiderEarningsSection
+          riders={filteredRiders}
+          earningsByRider={earningsByRider}
+          earningsLoading={earningsLoading}
+          payingEarningId={payingEarningId}
+          onFetchEarnings={fetchRiderEarnings}
+          onMarkPaid={handleMarkPaid}
+          onCancelEarning={handleCancelEarning}
+        />
       )}
+
+      {/* ----- List ----- */}
+      {statusFilter !== "earnings" &&
+        !loading &&
+        !loadError &&
+        filteredRiders.length > 0 && (
+          <div className="space-y-3">
+            {filteredRiders.map((rider) => (
+              <RiderRow
+                key={rider._id}
+                rider={rider}
+                isApproving={approvingId === rider._id}
+                isRejecting={rejectingId === rider._id}
+                isBlacklisting={blacklistingId === rider._id}
+                isUnblacklisting={unblacklistingId === rider._id}
+                onApprove={() => handleApprove(rider)}
+                onReject={() => handleReject(rider)}
+                onBlacklist={() => handleBlacklist(rider)}
+                onUnblacklist={() => handleUnblacklist(rider)}
+              />
+            ))}
+          </div>
+        )}
 
       {/* ----- Create modal ----- */}
       {showCreate && (
@@ -887,4 +1098,356 @@ const CreateRiderModal = ({
       </div>
     </div>
   );
+};
+
+// ============================================================
+// RIDER EARNINGS SECTION
+// ============================================================
+// Rendered when the admin selects the "Earnings" tab in the
+// RiderManagement page. For each rider in the (filtered) list,
+// we show:
+//   1. A summary card with total/pending/earned/paid
+//   2. An expandable list of every earning (with [Mark as Paid]
+//      and [Cancel] actions for unpaid ones)
+//
+// The component is "self-contained" — it calls onFetchEarnings
+// (passed from the parent) to lazy-load each rider's data the
+// first time their card is shown, then keeps the data in the
+// parent's earningsByRider cache so navigating away + back
+// doesn't re-hit the server.
+// ============================================================
+interface RiderEarningsSectionProps {
+  riders: AdminRider[];
+  earningsByRider: Record<string, RiderEarningsResponse | null>;
+  earningsLoading: Set<string>;
+  payingEarningId: string | null;
+  onFetchEarnings: (riderId: string, force?: boolean) => Promise<void>;
+  onMarkPaid: (riderId: string, earningId: string) => Promise<void>;
+  onCancelEarning: (riderId: string, earningId: string) => Promise<void>;
+}
+
+const RiderEarningsSection = ({
+  riders,
+  earningsByRider,
+  earningsLoading,
+  payingEarningId,
+  onFetchEarnings,
+  onMarkPaid,
+  onCancelEarning,
+}: RiderEarningsSectionProps) => {
+  // When the section first mounts, kick off earnings fetches for
+  // every visible rider. We DON'T await — each card shows its
+  // own skeleton. This means the section appears immediately
+  // and rows populate as their data arrives (in parallel).
+  useEffect(() => {
+    for (const r of riders) {
+      if (earningsByRider[r._id] === undefined && !earningsLoading.has(r._id)) {
+        onFetchEarnings(r._id);
+      }
+    }
+    // We intentionally exclude onFetchEarnings / earningsByRider
+    // / earningsLoading from deps — we only want to kick off
+    // fetches for riders we haven't seen yet. Re-running on
+    // every state change would cause an infinite loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [riders]);
+
+  if (riders.length === 0) {
+    return (
+      <EmptyState
+        icon={<Wallet className="w-12 h-12" />}
+        title="No riders to show"
+        description="Switch to All/Pending/Approved to see riders."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {riders.map((rider) => (
+        <RiderEarningsCard
+          key={rider._id}
+          rider={rider}
+          data={earningsByRider[rider._id] ?? null}
+          loading={earningsLoading.has(rider._id)}
+          payingEarningId={payingEarningId}
+          onRefresh={() => onFetchEarnings(rider._id, true)}
+          onMarkPaid={(earningId) => onMarkPaid(rider._id, earningId)}
+          onCancel={(earningId) => onCancelEarning(rider._id, earningId)}
+        />
+      ))}
+    </div>
+  );
+};
+
+// ============================================================
+// RIDER EARNINGS CARD — per-rider card with summary + earning list
+// ============================================================
+const RiderEarningsCard = ({
+  rider,
+  data,
+  loading,
+  payingEarningId,
+  onRefresh,
+  onMarkPaid,
+  onCancel,
+}: {
+  rider: AdminRider;
+  data: RiderEarningsResponse | null;
+  loading: boolean;
+  payingEarningId: string | null;
+  onRefresh: () => void;
+  onMarkPaid: (earningId: string) => Promise<void>;
+  onCancel: (earningId: string) => Promise<void>;
+}) => {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <Card>
+      <CardContent className="p-5 space-y-4">
+        {/* ----- Header: name + summary tiles ----- */}
+        <div className="flex flex-col md:flex-row md:items-start gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-lg font-semibold text-gray-900">
+                {rider.fullname}
+              </h3>
+              {rider.isBlacklisted && (
+                <span className="inline-block px-2 py-0.5 text-xs font-medium rounded border bg-red-100 text-red-800 border-red-300">
+                  Suspended
+                </span>
+              )}
+              {!rider.isApproved && (
+                <span className="inline-block px-2 py-0.5 text-xs font-medium rounded border bg-amber-100 text-amber-800 border-amber-300">
+                  Pending
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {rider.email}
+              <span className="text-gray-300 mx-1.5">•</span>
+              {rider.contact}
+            </p>
+          </div>
+
+          {loading && !data ? (
+            <div className="flex flex-wrap gap-2 md:max-w-md">
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-16 w-24 rounded-lg" />
+              ))}
+            </div>
+          ) : data ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:max-w-2xl">
+              <EarningSummaryTile
+                icon={<TrendingUp className="w-4 h-4" />}
+                label="Total"
+                value={data.summary.total}
+                color="bg-blue-50 text-blue-600"
+              />
+              <EarningSummaryTile
+                icon={<Clock className="w-4 h-4" />}
+                label="Pending"
+                value={data.summary.pending}
+                color="bg-yellow-50 text-yellow-600"
+              />
+              <EarningSummaryTile
+                icon={<Banknote className="w-4 h-4" />}
+                label="Earned"
+                value={data.summary.earned}
+                color="bg-green-50 text-green-600"
+              />
+              <EarningSummaryTile
+                icon={<Wallet className="w-4 h-4" />}
+                label="Paid"
+                value={data.summary.paid}
+                color="bg-purple-50 text-purple-600"
+              />
+            </div>
+          ) : null}
+        </div>
+
+        {/* ----- Earning list (expandable) ----- */}
+        {data && data.earnings.length > 0 && (
+          <div className="border-t border-gray-100 pt-3">
+            <button
+              type="button"
+              onClick={() => setExpanded((e) => !e)}
+              className="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-orange"
+            >
+              {expanded ? (
+                <ChevronUp className="w-4 h-4" />
+              ) : (
+                <ChevronDown className="w-4 h-4" />
+              )}
+              {data.earnings.length} earning
+              {data.earnings.length === 1 ? "" : "s"}
+              {data.summary.cancelled > 0 &&
+                ` (${data.summary.cancelled} cancelled)`}
+            </button>
+            {expanded && (
+              <div className="mt-3 space-y-1.5">
+                {sortEarningsForAdmin(data.earnings).map((e) => (
+                  <EarningRow
+                    key={e._id}
+                    earning={e}
+                    paying={payingEarningId === e._id}
+                    onMarkPaid={() => onMarkPaid(e._id)}
+                    onCancel={() => onCancel(e._id)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ----- Empty state for "no earnings yet" ----- */}
+        {data && data.earnings.length === 0 && (
+          <p className="text-sm text-gray-500 italic">
+            No earnings yet — assign this rider to an order to start tracking their pay.
+          </p>
+        )}
+
+        {/* ----- Refresh button ----- */}
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onRefresh}
+            disabled={loading}
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 mr-1 ${loading ? "animate-spin" : ""}`}
+            />
+            Refresh
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+// ============================================================
+// EARNING SUMMARY TILE — one of the 4 mini-cards in the header
+// ============================================================
+const EarningSummaryTile = ({
+  icon,
+  label,
+  value,
+  color,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  color: string;
+}) => (
+  <div className={`rounded-lg p-2.5 ${color.split(" ")[0]} flex items-center gap-2`}>
+    <div className={`w-7 h-7 rounded flex items-center justify-center ${color}`}>
+      {icon}
+    </div>
+    <div className="min-w-0">
+      <p className="text-[10px] text-gray-500 uppercase tracking-wide">{label}</p>
+      <p className="text-sm font-bold text-gray-900">{fmtRs(value)}</p>
+    </div>
+  </div>
+);
+
+// ============================================================
+// EARNING ROW — one line in the expandable list
+// ============================================================
+const EarningRow = ({
+  earning,
+  paying,
+  onMarkPaid,
+  onCancel,
+}: {
+  earning: Earning;
+  paying: boolean;
+  onMarkPaid: () => Promise<void>;
+  onCancel: () => Promise<void>;
+}) => {
+  const orderId = earning.order?._id?.slice(-8).toUpperCase() || "—";
+  const restaurantName = earning.order?.restaurant?.name || "—";
+
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-3 py-2 bg-gray-50 rounded-md">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-mono text-xs text-gray-500">#{orderId}</span>
+          <span
+            className={`inline-block px-1.5 py-0.5 text-[10px] font-medium rounded border ${
+              EARNING_STATUS_COLORS[earning.status]
+            }`}
+          >
+            {EARNING_STATUS_LABELS[earning.status]}
+          </span>
+        </div>
+        <p className="text-xs text-gray-700 mt-0.5">{restaurantName}</p>
+        <p className="text-[10px] text-gray-400 mt-0.5">
+          {fmtKm(earning.distanceMeters)}
+          <span className="text-gray-300 mx-1">•</span>
+          {new Date(earning.createdAt).toLocaleDateString()}
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <p className="text-sm font-bold text-gray-900">
+          {fmtRs(earning.amount)}
+        </p>
+        {earning.status === "earned" && (
+          <Button
+            type="button"
+            size="sm"
+            onClick={onMarkPaid}
+            disabled={paying}
+            className="bg-green-600 hover:bg-green-700 text-white"
+          >
+            <Check className="w-3 h-3 mr-1" />
+            {paying ? "Paying…" : "Mark as Paid"}
+          </Button>
+        )}
+        {(earning.status === "pending" || earning.status === "earned") && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onCancel}
+            disabled={paying}
+            className="text-red-700 border-red-200 hover:bg-red-50"
+          >
+            Cancel
+          </Button>
+        )}
+        {earning.status === "paid" && earning.paidAt && (
+          <span className="text-[10px] text-gray-400">
+            Paid {new Date(earning.paidAt).toLocaleDateString()}
+            {earning.paidMethod && ` • ${earning.paidMethod}`}
+          </span>
+        )}
+        {earning.status === "cancelled" && earning.cancelledAt && (
+          <span className="text-[10px] text-gray-400">
+            Cancelled {new Date(earning.cancelledAt).toLocaleDateString()}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// sortEarningsForAdmin — pending/earned first (most actionable),
+// newest first within each status. Pure helper.
+// ============================================================
+const sortEarningsForAdmin = (earnings: Earning[]): Earning[] => {
+  const order: Record<EarningStatus, number> = {
+    earned: 0,
+    pending: 1,
+    paid: 2,
+    cancelled: 3,
+  };
+  return [...earnings].sort((a, b) => {
+    const oa = order[a.status];
+    const ob = order[b.status];
+    if (oa !== ob) return oa - ob;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
 };
