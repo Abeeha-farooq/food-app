@@ -504,25 +504,66 @@ const OrdersPage = () => {
                           // PATCH /api/orders/:id/status for THIS order only.
                           // The local list + modal are updated optimistically
                           // on success, and a small spinner shows while waiting.
-                          <div className="flex items-center gap-2">
-                            <select
-                              aria-label="Change order status"
-                              value={order.status}
-                              disabled={updatingOrderId === order._id}
-                              onChange={(e) =>
-                                updateStatus(
-                                  order._id,
-                                  e.target.value as OrderStatus
-                                )
-                              }
-                              className="text-xs rounded-md border border-gray-300 bg-white px-2 py-1 pr-7 focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer min-w-[140px]"
-                            >
-                              {ADMIN_SETTABLE_STATUSES.map((s) => (
-                                <option key={s} value={s}>
-                                  {STATUS_LABELS[s]}
-                                </option>
-                              ))}
-                            </select>
+                          //
+                          // We use Radix DropdownMenu (NOT a native <select>)
+                          // for two reasons:
+                          //   1. The row has an onClick that opens the detail
+                          //      modal. A native <select> opened the OS dropdown
+                          //      AND bubbled the click up to the row, opening
+                          //      the modal at the same time (bug report). Radix
+                          //      renders its own absolutely-positioned panel,
+                          //      and we stopPropagation on the wrapper so the
+                          //      row never sees the click.
+                          //   2. The native dropdown also overlapped the row
+                          //      awkwardly and was clipped by the table.
+                          <div
+                            className="flex items-center gap-2"
+                            // Stop the click from bubbling up to the <tr> and
+                            // opening the detail modal behind the dropdown.
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  disabled={updatingOrderId === order._id}
+                                  className="h-7 text-xs justify-between min-w-[140px] px-2 py-1 border-gray-300 bg-white"
+                                >
+                                  <span>{STATUS_LABELS[order.status]}</span>
+                                  <ChevronDown className="w-3.5 h-3.5 ml-2 opacity-60" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent
+                                align="start"
+                                sideOffset={4}
+                                // Reuse the trigger width so the panel lines
+                                // up neatly with the small row button.
+                                className="min-w-[var(--radix-dropdown-menu-trigger-width)] max-h-60"
+                                // Click on the panel also shouldn't bubble to
+                                // the row (defense-in-depth: Radix already
+                                // portals it, but keeps the contract obvious).
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {ADMIN_SETTABLE_STATUSES.filter(
+                                  (v) => v !== order.status
+                                ).map((value) => (
+                                  <DropdownMenuItem
+                                    key={value}
+                                    onSelect={() =>
+                                      updateStatus(order._id, value)
+                                    }
+                                    className="cursor-pointer text-xs"
+                                  >
+                                    <span
+                                      className={`inline-block px-2 py-0.5 text-xs font-medium rounded border ${STATUS_COLORS[value]}`}
+                                    >
+                                      {STATUS_LABELS[value]}
+                                    </span>
+                                  </DropdownMenuItem>
+                                ))}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                             {updatingOrderId === order._id && (
                               <Loader2
                                 className="h-3.5 w-3.5 animate-spin text-orange-500 shrink-0"
