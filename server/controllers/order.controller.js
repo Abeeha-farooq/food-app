@@ -319,7 +319,10 @@ export const getMyOrders = asyncHandler(async (req, res) => {
 export const getRiderOrders = asyncHandler(async (req, res) => {
   const orders = await Order.find({ rider: req.user._id })
     .sort({ createdAt: -1 })
-    .populate("restaurant", "name city address imageUrl")
+    // `location` is included so the rider's "Show map" view can
+    // plot the restaurant pin (geocoded at restaurant creation
+    // time, or backfilled by scripts/geocode-restaurants.js).
+    .populate("restaurant", "name city address imageUrl location")
     .populate("user", "fullname contact");
 
   return res.status(200).json(

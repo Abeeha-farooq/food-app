@@ -70,7 +70,22 @@ export interface Order {
   // All fields are optional because the GET endpoints populate
   // different subsets.
   user?: { _id?: string; fullname?: string; email?: string; contact?: string };
-  restaurant: { _id: string; name: string; city?: string; address?: string; imageUrl?: string };
+  restaurant: {
+    _id: string;
+    name: string;
+    city?: string;
+    address?: string;
+    imageUrl?: string;
+    // Geocoded coords (set when admin runs the geocoding
+    // backfill or when a new restaurant is created with
+    // coords). Optional — the rider's map will skip the
+    // restaurant pin if not present.
+    location?: { lat: number | null; lng: number | null; geocodedAt?: string | null };
+  };
+  // Geocoded delivery location (set at order placement time
+  // via Nominatim or Google Geocoding). Optional — the rider's
+  // map will skip the customer pin if not present.
+  deliveryLocation?: { lat: number | null; lng: number | null; geocodedAt?: string | null };
   items: OrderItem[];
   subtotal: number;
   deliveryFee: number;

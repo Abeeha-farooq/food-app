@@ -30,7 +30,10 @@ import {
   Truck,
   MapPinOff,
   XCircle,
+  Eye,
+  EyeOff,
 } from "lucide-react";
+import DeliveryMap from "@/components/ui/DeliveryMap";
 import { toast } from "sonner";
 import api, { getErrorMessage } from "@/lib/api";
 import useGeolocation from "@/lib/useGeolocation";
@@ -347,6 +350,46 @@ const OrderCard = ({
   // out_for_delivery — they pick whichever matches reality.
   const showTerminalChoice = order.status === "out_for_delivery";
 
+  // ----- Map toggle -----
+  // The map is collapsed by default to keep the card scannable
+  // for fast dispatch. The rider taps "Show map" to expand it
+  // and see the full delivery route with their own position
+  // updating live. We use local state (per-card) so toggling
+  // one card doesn't affect the others in the list.
+  const [showMap, setShowMap] = useState(false);
+
+  // ----- Compute map points (with safe fallbacks) -----
+  // The <DeliveryMap> component expects every pin to have
+  // numeric lat/lng. We pre-compute the three pins here so
+  // the JSX below stays clean. If any side is missing coords
+  // (e.g. the restaurant was added before geocoding), we
+  // skip that pin rather than passing a malformed object.
+  const mapCustomer =
+    order.deliveryLocation?.lat != null && order.deliveryLocation?.lng != null
+      ? {
+          lat: order.deliveryLocation.lat,
+          lng: order.deliveryLocation.lng,
+          label: order.deliveryAddress || "Delivery address",
+        }
+      : null;
+  const mapRestaurant =
+    order.restaurant?.location?.lat != null && order.restaurant?.location?.lng != null
+      ? {
+          lat: order.restaurant.location.lat,
+          lng: order.restaurant.location.lng,
+          label: order.restaurant.name,
+        }
+      : null;
+  // If the delivery coords aren't geocoded, fall back to using
+  // the rider's current position as the map center. The map
+  // still works — it just doesn't have a separate customer pin
+  // until the order was geocoded at placement.
+  const mapFallback = riderCoords
+    ? { lat: riderCoords.lat, lng: riderCoords.lng, label: "Your location" }
+    : mapRestaurant
+    ? { lat: mapRestaurant.lat, lng: mapRestaurant.lng, label: mapRestaurant.label }
+    : null;
+
   return (
     <Card>
       <CardContent className="p-5 space-y-4">
@@ -446,6 +489,52 @@ const OrderCard = ({
             </>
           )}
         </div>
+
+        {/* ----- Show / hide map toggle ----- */}
+        {/* We don't render the map until the rider opts in — the
+            Google Maps script is ~150KB of JS and we don't want
+            to load it for every order card in the list. Once
+            expanded, the map stays mounted (no re-render) so
+            the rider's live position can update smoothly. */}
+        <button
+          type="button"
+          onClick={() => setShowMap((s) => !s)}
+          className="flex items-center gap-1.5 text-sm font-medium text-orange hover:text-hoverOrange transition-colors self-start"
+        >
+          {showMap ? (
+            <EyeOff className="w-4 h-4" />
+          ) : (
+            <Eye className="w-4 h-4" />
+          )}
+          {showMap ? "Hide map" : "Show map"}
+        </button>
+
+        {/* ----- The map (only mounted when expanded) ----- */}
+        {showMap && mapFallback && (
+          <div className="space-y-2">
+            <DeliveryMap
+              customer={mapCustomer ?? mapFallback}
+              restaurant={mapRestaurant ?? undefined}
+              rider={
+                riderCoords
+                  ? { lat: riderCoords.lat, lng: riderCoords.lng, label: "You" }
+                  : null
+              }
+              height={260}
+            />
+            {/* If we're missing the delivery coords, surface that
+                clearly so the rider knows the customer pin is
+                approximate (it's pinned to the rider's location
+                in the meantime). */}
+            {!mapCustomer && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                Delivery address not yet geocoded — the customer pin
+                shows your current position as a placeholder. It will
+                update automatically once the address resolves.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* ----- Delivery (customer address) ----- */}
         <div className="flex items-start gap-2 text-sm p-3 bg-orange-50 border border-orange-100 rounded-md">
