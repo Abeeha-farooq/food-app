@@ -35,14 +35,21 @@ export const verifyJWT = asyncHandler(async (req, _res, next) => {
     // has all fields (fullname, email, role, profilePicture, etc.)
     // and is up-to-date.
     //
-    // We also explicitly select `sessionVersion` because the default
-    // Mongoose query doesn't include it (no `select: false` on the
-    // schema, but the `.select("-password")` form excludes only
-    // password — every other field is included by default. We just
-    // want to be defensive in case the field is later added with
-    // `select: false`).
-    const user = await User.findById(decoded._id)
-      .select("-password +sessionVersion");
+    // Why this is an INCLUSION projection (and not "-password" +
+    // "+sessionVersion"):
+    //   Mongoose refuses to mix exclusion and inclusion in a single
+    //   .select() call — it throws
+    //   "Cannot do exclusion on field X in inclusion projection"
+    //   at query time. The schema already has `select: false` on
+    //   `password`, so it never comes back in the default projection.
+    //   That means we can safely use the default shape (no .select
+    //   at all) for everything except the explicitly-hidden fields,
+    //   and the `password` field will be correctly excluded by the
+    //   schema, not by a .select argument.
+    //
+    //   `sessionVersion` has no `select: false`, so it's included
+    //   by default — no need for a +sessionVersion either.
+    const user = await User.findById(decoded._id);
     if (!user) {
       throw new ApiError(401, "Unauthorized: user not found");
     }
