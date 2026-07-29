@@ -41,7 +41,7 @@ import {
   UserCheck,
   LogOut,
 } from "lucide-react";
-import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useRef, useState, type ChangeEvent, type FormEvent, useEffect } from "react";
 import { toast } from "sonner";
 import { userLoginSchema, type LoginInputState } from "@/schema/userSchema";
 import { useAuth } from "@/context/useAuth";
@@ -117,6 +117,31 @@ const Login = () => {
   // Special state for the "email not verified" UX
   const [needsVerification, setNeedsVerification] = useState(false);
   const [resending, setResending] = useState(false);
+
+  // ----- "You were logged out" banner -----
+  // When the axios interceptor in lib/api.ts catches a 401 (token
+  // expired, tampered, or — for admins — "session invalidated by a
+  // newer login on another device"), it stores the server's reason
+  // in sessionStorage under `auth:logoutMessage` and then redirects
+  // to /login. We read it on mount and show it as a banner above
+  // the form, so the user understands WHY they landed back here.
+  //
+  // The admin-kickout case in particular needs this: the user
+  // didn't log out, didn't have an expired session, but the device
+  // they were on got invalidated. A generic "please log in" page
+  // would be confusing.
+  const [logoutMessage, setLogoutMessage] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const msg = sessionStorage.getItem("auth:logoutMessage");
+      if (msg) {
+        setLogoutMessage(msg);
+        sessionStorage.removeItem("auth:logoutMessage");
+      }
+    } catch {
+      // sessionStorage unavailable — ignore
+    }
+  }, []);
 
   const changeEventHandler = (e: ChangeEvent<HTMLInputElement>) => {
     setInput({ ...input, [e.target.name]: e.target.value });
@@ -234,6 +259,22 @@ const Login = () => {
                 : "Log in to your FlavorCourt account"}
           </p>
         </div>
+
+        {/* ----- "You were logged out" banner -----
+            Shown only when the user landed on /login because the
+            axios interceptor caught a 401 on a previous request.
+            The most important case is the admin "kicked by newer
+            login" flow — the user didn't log out, they were
+            forcibly disconnected, and they need to know why. */}
+        {logoutMessage && !isAuthenticated && !forgotPasswordMode && (
+          <div
+            role="status"
+            className="flex items-start gap-2 p-3 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 rounded-lg text-sm text-blue-800 dark:text-blue-200"
+          >
+            <ShieldAlert className="w-4 h-4 mt-0.5 flex-shrink-0" />
+            <p>{logoutMessage}</p>
+          </div>
+        )}
 
         {/* ----- Initial auth check -----
             While AuthContext is still figuring out "is anyone logged

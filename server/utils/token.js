@@ -10,14 +10,29 @@
 
 import jwt from "jsonwebtoken";
 
-// Sign a JWT for a user. We embed the user's _id and role in the
-// payload so the verify middleware can do role checks without a DB hit.
+// Sign a JWT for a user. We embed the user's _id, role, and
+// sessionVersion in the payload so the verify middleware can do
+// role + session-validity checks without a separate DB hit for
+// the version.
+//
+// `sessionVersion` is the key piece that powers the "kick the
+// previous session" flow for admins. When an admin logs in on a
+// new device, the login controller bumps sessionVersion on the
+// user document. The new JWT carries the bumped value; the old
+// device's JWT still carries the old value; verifyJWT compares
+// the two and rejects the old token with 401. See
+// middlewares/auth.middleware.js for the check.
 export const generateToken = (user) => {
   return jwt.sign(
     {
       _id: user._id.toString(),
       role: user.role,
       email: user.email,
+      // Default to 0 if the field is missing (shouldn't happen
+      // with the model default, but defensive — tokens issued
+      // before this field existed have no value and would parse
+      // as undefined otherwise).
+      sessionVersion: user.sessionVersion ?? 0,
     },
     process.env.JWT_SECRET,
     {

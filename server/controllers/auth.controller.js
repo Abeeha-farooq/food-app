@@ -291,6 +291,49 @@ export const login = asyncHandler(async (req, res) => {
     );
   }
 
+  // ----- Single-session enforcement for admins -----
+  // If the user is logging in as an admin, bump their sessionVersion.
+  // This invalidates any previously-issued JWT for this admin (their
+  // old device / browser still has the old version in its token;
+  // verifyJWT will reject it on the next request). The user object
+  // we have in memory is the PRE-bump version, so we re-read the
+  // document to get the fresh value before signing the new token.
+  //
+  // Why only admins:
+  //   - Admins are high-trust (can edit restaurants, blacklist users,
+  //     see all orders, refund payments). A lost/stolen admin device
+  //     must be invalidated immediately, not after 7 days of natural
+  //     JWT expiry.
+  //   - Customers and riders routinely use multiple devices (phone
+  //     + laptop, family device, etc.). Kicking them off a previous
+  //     device on every login would be hostile UX.
+  //
+  // Why `$inc` and not `$set`:
+  //   `$inc` is atomic on a single document. Two admins logging in
+  //   simultaneously (rare but possible) would get DIFFERENT
+  //   incremented values instead of a race that lands them on the
+  //   same number and undoes the kick.
+  //
+  // Why we re-fetch after the bump:
+  //   The `user` variable above is a Mongoose document loaded BEFORE
+  //   the bump. If we just sign the token with the in-memory version,
+  //   the token would carry the OLD version and the kick would
+  //   silently fail. The re-fetch returns the freshly-bumped value
+  //   and we sign with that.
+  if (user.role === "admin") {
+    const bumped = await User.findByIdAndUpdate(
+      user._id,
+      { $inc: { sessionVersion: 1 } },
+      { new: true, select: "sessionVersion" }
+    );
+    if (bumped) {
+      user.sessionVersion = bumped.sessionVersion;
+      console.log(
+        `[Auth] Admin login → sessionVersion bumped to ${user.sessionVersion} for user ${user._id} (${user.email})`
+      );
+    }
+  }
+
   const token = generateToken(user);
   res.cookie("token", token, {
     httpOnly: true,

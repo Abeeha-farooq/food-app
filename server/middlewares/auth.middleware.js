@@ -30,12 +30,53 @@ export const verifyJWT = asyncHandler(async (req, _res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    // `decoded` is the payload we signed at login: { _id, role, ... }
-    // Fetch the live user document so req.user has all fields (fullname,
-    // email, role, profilePicture, etc.) and is up-to-date.
-    const user = await User.findById(decoded._id).select("-password");
+    // `decoded` is the payload we signed at login: { _id, role, email,
+    // sessionVersion, ... }. Fetch the live user document so req.user
+    // has all fields (fullname, email, role, profilePicture, etc.)
+    // and is up-to-date.
+    //
+    // We also explicitly select `sessionVersion` because the default
+    // Mongoose query doesn't include it (no `select: false` on the
+    // schema, but the `.select("-password")` form excludes only
+    // password — every other field is included by default. We just
+    // want to be defensive in case the field is later added with
+    // `select: false`).
+    const user = await User.findById(decoded._id)
+      .select("-password +sessionVersion");
     if (!user) {
       throw new ApiError(401, "Unauthorized: user not found");
+    }
+
+    // ----- Session version check (admins only) -----
+    // For role="admin", the token's sessionVersion must match the
+    // user's current sessionVersion. If it doesn't, this token is
+    // from a previous login that's been superseded by a newer one
+    // (likely on a different device). Reject with 401 so the kicked-
+    // out admin's next request fails and the axios interceptor
+    // redirects them to /login.
+    //
+    // We default both sides to 0 when the field is missing (for
+    // tokens issued before the field existed), so old tokens with
+    // no sessionVersion still match users with default 0.
+    //
+    // Why only admins: customer/rider accounts routinely use
+    // multiple devices simultaneously, and kicking them off
+    // on every login would be hostile UX. Admins are
+    // high-trust, so the stricter behavior is appropriate.
+    if (user.role === "admin") {
+      const tokenVersion = decoded.sessionVersion ?? 0;
+      const currentVersion = user.sessionVersion ?? 0;
+      if (tokenVersion !== currentVersion) {
+        console.warn(
+          `[Auth] Admin session invalidated — user=${user._id} (${user.email}), ` +
+          `tokenVersion=${tokenVersion}, currentVersion=${currentVersion}. ` +
+          `Kicked (likely a new login on another device).`
+        );
+        throw new ApiError(
+          401,
+          "Your session has ended because someone signed in to this account on another device. Please sign in again."
+        );
+      }
     }
 
     // ----- Blacklist check -----

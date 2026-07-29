@@ -56,12 +56,38 @@ api.interceptors.response.use(
   // and `error.message` so we don't have to use `any`.
   (error: AxiosError) => {
     // 401 = the server says "you're not authorized"
-    // This usually means the token expired or was tampered with.
+    // This usually means the token expired, was tampered with, or
+    // the user's session was invalidated by a newer login (the admin
+    // "kick the previous session" flow).
     if (error.response?.status === 401) {
       // Clear the bad token so we don't keep sending it.
       localStorage.removeItem("token");
-      // Only redirect if we're not already on the login page (avoid loops).
+
+      // Show the server's message as a toast (if there is one) BEFORE
+      // we redirect. The server returns a specific, user-friendly
+      // message when the session was invalidated by another login
+      // ("Your session has ended because someone signed in to this
+      // account on another device. Please sign in again."). We want
+      // the user to see that, not a generic "Unauthorized" error.
+      //
+      // We use a setTimeout to defer the toast + redirect slightly
+      // so the calling component's catch block can run first (some
+      // components show their own error UI; the toast is a global
+      // breadcrumb on top of that).
+      const message =
+        (error.response.data as { message?: string } | undefined)?.message ||
+        "Your session has ended. Please sign in again.";
       if (!window.location.pathname.startsWith("/login")) {
+        // Use sessionStorage so a global toast can pick it up on the
+        // /login page (where Sonner renders). The login page reads
+        // it and shows the message on mount.
+        try {
+          sessionStorage.setItem("auth:logoutMessage", message);
+        } catch {
+          // sessionStorage unavailable (private mode, etc.) — fall
+          // through; the user will still get the redirect, just
+          // without the message context.
+        }
         window.location.href = "/login";
       }
     }

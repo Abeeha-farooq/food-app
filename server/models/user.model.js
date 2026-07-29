@@ -125,6 +125,32 @@ const userSchema = new mongoose.Schema(
       default: "",
       maxlength: 500,
     },
+
+    // ----- Session version (single-session enforcement for admins) -----
+    // Bumped on every admin login. The current value is embedded in the
+    // JWT at sign time; verifyJWT compares the token's value to the
+    // user's current value on every request. A mismatch means "this
+    // token is from a previous login that's been superseded" → 401.
+    //
+    // Why this exists: an admin account is high-trust (it can edit
+    // restaurants, blacklist users, see all orders, refund payments).
+    // If an admin's laptop is lost or stolen, the new admin logging in
+    // from their other device needs to immediately invalidate the
+    // stolen-device's session — not wait 7 days for the JWT to expire.
+    //
+    // Only ENFORCED for role="admin" right now. Customers and riders
+    // can have multiple devices (it's normal for them to be on phone +
+    // laptop simultaneously). The field exists on all users so the
+    // enforcement can be extended later without a migration.
+    //
+    // Increment is done with `$inc: { sessionVersion: 1 }` in the
+    // login controller. Default 0 (matches tokens issued before this
+    // field existed, so no migration is needed).
+    sessionVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   {
     // `timestamps` automatically adds `createdAt` and `updatedAt` fields.
