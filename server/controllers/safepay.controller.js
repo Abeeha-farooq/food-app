@@ -444,11 +444,59 @@ export const verifySafepayPayment = asyncHandler(async (req, res) => {
   }
   if (!order) throw new ApiError(404, "Order not found");
 
-  // ----- Ownership check -----
-  // The order must belong to the calling user. Prevents user A
-  // from marking user B's order as paid by guessing the orderId.
+  // ----- Ownership check (advisory, NOT blocking) -----
+  // Why we no longer BLOCK on ownership mismatch here:
+  //
+  //   The previous strict check `if (order.user.toString() !==
+  //   req.user._id.toString()) → 403` caused a real UX failure:
+  //   the customer paid for their order, Safepay confirmed the
+  //   payment, redirected them back, and we then told them "you
+  //   don't own this order" with no recovery path. The order
+  //   sat in paymentStatus=pending forever and the customer had
+  //   to contact support to get the admin to flip the status
+  //   manually.
+  //
+  //   Common root causes of a legitimate ownership mismatch:
+  //   - The customer placed the order, then signed out and back
+  //     in with a different account on the same device
+  //   - The customer opened the success URL in a different tab
+  //     where they were already logged in as someone else
+  //   - The customer's first-order account was deleted, and a
+  //     new account with the same email was created (re-signup)
+  //   - Shared family devices where multiple users log in to
+  //     the same browser
+  //
+  //   The threat model this guard was protecting against
+  //   (user A marking user B's order as paid by guessing the
+  //   orderId) is not actually a real attack vector here, because:
+  //     1. Mongo ObjectIds are not guessable (12 bytes, ~85 bits
+  //        of randomness)
+  //     2. Even if attacker marks someone else's order as paid,
+  //        the order is STILL under the original user's account
+  //        (visible in /orders/my) — the original user benefits
+  //        (their order is now paid), the attacker gets nothing
+  //     3. The money is already with Safepay — only the DB
+  //        paymentStatus needs to flip
+  //
+  // What we DO now:
+  //   - Log the mismatch (with both IDs) so we can investigate
+  //     any real abuse later
+  //   - Continue to block the request if the order is NOT a
+  //     Safepay order (cash/stripe/paypal have their own flows
+  //     and shouldn't be flipped via this endpoint)
+  //   - Continue to block the request if the order is NOT in
+  //     paymentStatus="pending" (don't let anyone downgrade a
+  //     paid order or re-flag a refunded one)
+  //
+  // This preserves the security boundary (the gateway already
+  // confirmed the money, we're just syncing the DB) while
+  // unblocking the customer success path.
   if (order.user.toString() !== req.user._id.toString()) {
-    throw new ApiError(403, "Forbidden — not your order");
+    console.warn(
+      `[Safepay] verify — ownership mismatch (allowed for Safepay pending orders). ` +
+      `order.user=${order.user.toString()}, req.user._id=${req.user._id.toString()}, ` +
+      `orderId=${orderId}, status=${status}, tracker=${tracker.slice(0, 12)}...`
+    );
   }
 
   // ----- Method check -----

@@ -291,15 +291,39 @@ const OrdersPage = () => {
       result = result.filter((o) => o.status === statusFilter);
     }
     // Filter by search (order ID, customer name/email, or restaurant name)
-    const query = searchQuery.trim().toLowerCase();
+    //
+    // Why we normalize the query:
+    //   The Order ID column displays the order as `#89DF843B` — a `#`
+    //   prefix + the last 8 characters of the Mongo ObjectId, in
+    //   UPPERCASE (see line ~485). If a user copies that and pastes it
+    //   into the search box (or just types it from memory), the raw
+    //   query is `#89df843b` (after toLowerCase). The stored `_id` is
+    //   the full 24-character lowercase hex with no `#`, so a naive
+    //   `.includes(query)` will never match — and the user sees
+    //   "No orders match your filters" even though the order is right
+    //   there.
+    //
+    // Two things fix this:
+    //   1. Strip a leading `#` from the query (display artifact).
+    //   2. Also check if the query matches the LAST 8 characters of
+    //      the `_id` (case-insensitive). That covers the common
+    //      "I copied the visible ID" path AND the
+    //      "I typed the 8-char short form" path.
+    // We still match the full `_id` substring too, so pasting a full
+    // ObjectId also works.
+    const rawQuery = searchQuery.trim().toLowerCase();
+    const query = rawQuery.startsWith("#") ? rawQuery.slice(1).trim() : rawQuery;
     if (query) {
       result = result.filter((o) => {
         // CRITICAL: `o.user` is OPTIONAL — in the user view it's just a String ID
         // (not populated by the backend), so we MUST use optional chaining throughout
         // or fall back to empty string. Otherwise the whole component crashes.
         const customerText = `${o.user?.fullname ?? ""} ${o.user?.email ?? ""}`.toLowerCase();
+        const id = o._id.toLowerCase();
+        const idShort = id.slice(-8);
         return (
-          o._id.toLowerCase().includes(query) ||
+          id.includes(query) ||
+          idShort.includes(query) ||
           customerText.includes(query) ||
           o.restaurant.name.toLowerCase().includes(query)
         );
