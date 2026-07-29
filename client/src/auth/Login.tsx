@@ -20,7 +20,7 @@ import {
   RefreshCw,
   ArrowRight,
 } from "lucide-react";
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { toast } from "sonner";
 import { userLoginSchema, type LoginInputState } from "@/schema/userSchema";
 import { useAuth } from "@/context/useAuth";
@@ -42,6 +42,12 @@ const Login = () => {
   });
   const [loading, setLoading] = useState(false);
 
+  // Synchronous in-flight guard. setLoading(true) is async (waits for
+  // the next React render), so a user who double-clicks the Login
+  // button can fire the submit handler twice before the disabled prop
+  // kicks in. A ref flips immediately and blocks the second call.
+  const inFlightRef = useRef(false);
+
   // ----- Forgot password flow toggle -----
   // When true, the login form is replaced with the 3-step forgot
   // password flow (see ForgotPasswordFlow.tsx). The user can click
@@ -59,11 +65,30 @@ const Login = () => {
   const submitHandler = async (e: FormEvent) => {
     e.preventDefault();
 
+    // Synchronous double-submit guard. See inFlightRef comment above.
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+
+    // Email is trimmed (case-insensitive lookup is the server's job).
+    // Password is NOT trimmed — if the user signed up with a trailing
+    // space they need to type it back exactly. This matches the
+    // behavior of Google, GitHub, etc.: emails are forgiving, passwords
+    // are exact. We also reflect the trimmed email back into the input
+    // so the user can see what was actually sent.
+    const trimmedEmail = input.email.trim();
+    if (trimmedEmail !== input.email) {
+      setInput((prev) => ({ ...prev, email: trimmedEmail }));
+    }
+
     // Validate with zod before sending
-    const result = userLoginSchema.safeParse(input);
+    const result = userLoginSchema.safeParse({
+      email: trimmedEmail,
+      password: input.password,
+    });
     if (!result.success) {
       const errors = result.error.issues;
       toast.error(errors[0]?.message || "Invalid input");
+      inFlightRef.current = false;
       return;
     }
 
@@ -98,6 +123,7 @@ const Login = () => {
       }
     } finally {
       setLoading(false);
+      inFlightRef.current = false;
     }
   };
 

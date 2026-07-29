@@ -228,9 +228,32 @@ export const login = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Email and password are required");
   }
 
+  // ----- Length cap (defense in depth) -----
+  // The client zod schema caps email at 254 and password at 128, but
+  // never trust the client. A 500-char POST would otherwise:
+  //   - email: blow up the index lookup + lowercasing
+  //   - password: trigger an expensive bcrypt.compare on a huge string
+  // Match the client limits exactly so both layers agree.
+  if (typeof email !== "string" || email.length > 254) {
+    throw new ApiError(400, "Email is too long");
+  }
+  if (typeof password !== "string" || password.length > 128) {
+    throw new ApiError(400, "Password is too long");
+  }
+
+  // ----- Trim email (forgiving lookup) -----
+  // Emails are conceptually case- and whitespace-insensitive
+  // (RFC 5321 §4.5.3.1.3 lets local-parts be quoted to preserve
+  // internal spaces, but in practice no real user wants to type
+  // " john@x.com"). Trim leading/trailing spaces before lookup.
+  // The password is NOT trimmed — passwords are exact-match, so
+  // a user who registered with a trailing space must type it back
+  // the same way. This matches Google/GitHub conventions.
+  const normalizedEmail = email.trim().toLowerCase();
+
   // We explicitly select `password` (which has `select: false` on the
   // schema) so we can compare it.
-  const user = await User.findOne({ email: email.toLowerCase() }).select("+password");
+  const user = await User.findOne({ email: normalizedEmail }).select("+password");
   if (!user) {
     throw new ApiError(401, "Invalid email or password");
   }
