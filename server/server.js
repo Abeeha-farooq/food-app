@@ -30,6 +30,7 @@ import adminRoutes from "./routes/admin.route.js";
 import paymentRoutes from "./routes/payment.route.js";
 import couponRoutes from "./routes/coupon.route.js";
 import riderRoutes from "./routes/rider.route.js";
+import partnerLeadRoutes from "./routes/partnerLead.route.js";
 import ApiError from "./utils/apiError.js";
 
 const app = express();
@@ -231,6 +232,10 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/coupons", couponRoutes);
 app.use("/api/rider", riderRoutes);
+// Public B2B lead-capture endpoint for the /partner marketing page.
+// Throttled by the general rate limiter (100 req / 15 min / IP).
+// Admin-side list/update endpoints are in admin.route.js.
+app.use("/api/partner", partnerLeadRoutes);
 
 // 404 — no route matched
 app.use((req, _res, next) => {

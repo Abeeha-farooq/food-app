@@ -28,6 +28,10 @@ import {
   markEarningPaid,
   cancelEarning,
 } from "../controllers/earnings.controller.js";
+import {
+  listPartnerLeads,
+  updatePartnerLeadStatus,
+} from "../controllers/partnerLead.controller.js";
 import { verifyJWT, requireRole } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
@@ -102,5 +106,19 @@ router.delete("/coupons/:id", deleteCoupon);
 router.get("/earnings", getAllEarnings);
 router.patch("/earnings/:id/pay", markEarningPaid);
 router.patch("/earnings/:id/cancel", cancelEarning);
+
+// ----- Partner leads (B2B marketing form submissions) -----
+// GET   /api/admin/leads?status=new — list incoming partner
+//        applications from the /partner marketing page. Newest
+//        first. The status filter is optional; without it, ALL
+//        statuses are returned. Capped at 200 results.
+// PATCH /api/admin/leads/:id         — update status + notes
+//        (body: { status?: "new"|"contacted"|"qualified"|"rejected"|"signed",
+//                 notes?: string })
+// We mount these in admin (not in a public route) because
+// they expose customer PII (email, phone) and a competitor
+// shouldn't be able to scrape your lead pipeline.
+router.get("/leads", listPartnerLeads);
+router.patch("/leads/:id", updatePartnerLeadStatus);
 
 export default router;

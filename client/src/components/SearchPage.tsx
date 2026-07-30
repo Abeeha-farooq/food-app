@@ -80,9 +80,9 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "name", label: "Name (A–Z)" },
 ];
 
-// ============================================================
+
 // URL <-> state sync helpers
-// ============================================================
+
 // The filter state (search, cuisines, price) is mirrored to the URL so:
 //   1. Refreshing the page keeps your filters
 //   2. The user can share / bookmark a filtered view
@@ -157,8 +157,7 @@ const SearchPage = () => {
     if (selectedPrices.length === 1) next.set("price", selectedPrices[0]);
     // Only update if changed — avoids an unnecessary history entry.
     setSearchParams(next, { replace: true });
-    // We intentionally depend on the filter values, not setSearchParams
-    // (which is stable across renders).
+    
   }, [searchTerm, selectedCuisines, selectedPrices, setSearchParams]);
 
   // ----- Fetch whenever any filter or retry counter changes -----
@@ -199,9 +198,7 @@ const SearchPage = () => {
         });
         setRestaurants(res.data.data.items);
       } catch (err) {
-        // Ignore the abort — it's the expected outcome when filters
-        // change faster than the server can respond. Don't show a toast,
-        // don't set an error, don't log.
+       
         if (axios.isCancel(err)) return;
 
         const message = getErrorMessage(err);
@@ -218,10 +215,6 @@ const SearchPage = () => {
     };
     fetchRestaurants();
 
-    // Cleanup: abort the in-flight request if the effect re-runs before
-    // this one finished. React calls the cleanup BEFORE the next effect,
-    // so the previous fetch gets cancelled exactly when a new filter is
-    // applied — the canonical "no stale results" guarantee.
     return () => {
       controller.abort();
     };
@@ -255,19 +248,7 @@ const SearchPage = () => {
         className={cn(
           // Outer container — viewport-locked layout.
           //
-          // Why h-[calc(100vh-4rem)] (= 100vh - 64px navbar):
-          //   The user wants the LEFT filters sidebar to stay fixed
-          //   in place and fit completely within the viewport, while
-          //   the RIGHT side (restaurant cards) scrolls independently.
-          //   The cleanest way to achieve this is to make the page
-          //   wrapper exactly viewport-height (minus the fixed navbar),
-          //   then split it into two flex children:
-          //     - Top area: header + toolbar + active filter badges
-          //       (flex-shrink-0 — never scrolls)
-          //     - Bottom area: the two-column body
-          //       (flex-1 + overflow-hidden — the right column inside
-          //       it gets overflow-y-auto for independent scrolling)
-          //
+          
           // `flex flex-col` on the inner container turns the page into
           // a vertical stack: fixed stuff on top, scrollable body below.
           //

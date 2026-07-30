@@ -52,6 +52,11 @@ import { CartConflictModal } from './components/ui/CartConflictModal'
 import PaymentSuccessPage from './pages/PaymentSuccessPage'
 import PaymentFailurePage from './pages/PaymentFailurePage'
 
+// Marketing landing page — public, no auth, no MainLayout.
+// Sits at /partner and is the B2B lead-capture surface for
+// entrepreneurs who want to run their own FlavorCourt city.
+import PartnerLandingPage from './pages/landing/PartnerLandingPage'
+
 const appRouter = createBrowserRouter([
   {
     path: "/",
@@ -73,6 +78,15 @@ const appRouter = createBrowserRouter([
   { path: "/forgot-password", element: <ForgotPassword /> },
   { path: "/reset-password",  element: <ResetPassword /> },
   { path: "/verify-email",    element: <VerifyEmail /> },
+  // ============================================================
+  // B2B MARKETING LANDING PAGE
+  // ============================================================
+  // Public surface for the City Operator program. Lives at
+  // /partner and is intentionally OUTSIDE <MainLayout> so it
+  // renders as a standalone marketing site (no nav, no cart,
+  // no logged-in state). Lead-capture form posts to
+  // POST /api/partner/lead.
+  { path: "/partner",         element: <PartnerLandingPage /> },
   // ============================================================
   // PAYMENT REDIRECT TARGETS
   // ============================================================
